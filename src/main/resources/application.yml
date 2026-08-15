@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: cc-ai-code-mother-backend
+  profiles:
+    active: local   # 本地开发阶段默认走 local
+server:
+  port: 8123
+  servlet:
+    context-path: /api
+    # cookie 30 天过期
+    session:
+      cookie:
+        max-age: 2592000
+# springdoc-openapi
+springdoc:
+  group-configs:
+    - group: 'default'
+      paths-to-match: '/**'
+      packages-to-scan: com.zjcc.ccaicodemother.controller
+# knife4j
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
