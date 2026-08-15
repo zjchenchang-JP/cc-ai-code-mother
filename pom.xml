@@ -9,10 +9,10 @@
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.zjcc</groupId>
-    <artifactId>cc-ai-code-mother-backend</artifactId>
+    <artifactId>cc-ai-code-mother</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>cc-ai-code-mother-backend</name>
-    <description>cc-ai-code-mother-backend</description>
+    <name>cc-ai-code-mother</name>
+    <description>cc-ai-code-mother</description>
     <url/>
     <licenses>
         <license/>
