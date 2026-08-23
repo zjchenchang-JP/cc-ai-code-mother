@@ -9,10 +9,13 @@ import java.time.LocalDateTime;
 
 import java.io.Serial;
 
+import com.mybatisflex.core.keygen.KeyGenerators;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import javax.crypto.KeyGenerator;
 
 /**
  * 用户 实体类。
@@ -31,8 +34,9 @@ public class User implements Serializable {
 
     /**
      * id
+     * id 默认是连续生成的，容易被爬虫抓取，更换策略为 ASSIGN_ID 雪花算法生成
      */
-    @Id(keyType = KeyType.Auto)
+    @Id(keyType = KeyType.Generator, value = KeyGenerators.snowFlakeId)
     private Long id;
 
     /**
