@@ -11,6 +11,8 @@ use cc_ai_code_mother;
 -- 以下是建表语句
 
 -- 用户表
+-- editTime 和 updateTime 的区别：editTime 表示用户编辑个人信息的时间（需要业务代码来更新）
+-- 而 updateTime 表示这条用户记录任何字段发生修改的时间（由数据库自动更新）
 create table if not exists user
 (
     id           bigint auto_increment comment 'id' primary key,

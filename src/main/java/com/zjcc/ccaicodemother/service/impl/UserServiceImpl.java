@@ -1,20 +1,28 @@
 package com.zjcc.ccaicodemother.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.zjcc.ccaicodemother.exception.BusinessException;
 import com.zjcc.ccaicodemother.exception.ErrorCode;
 import com.zjcc.ccaicodemother.exception.ThrowUtils;
+import com.zjcc.ccaicodemother.model.dto.user.UserQueryRequest;
 import com.zjcc.ccaicodemother.model.entity.User;
 import com.zjcc.ccaicodemother.mapper.UserMapper;
 import com.zjcc.ccaicodemother.model.enums.UserRoleEnum;
 import com.zjcc.ccaicodemother.model.vo.LoginUserVO;
+import com.zjcc.ccaicodemother.model.vo.UserVO;
 import com.zjcc.ccaicodemother.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.stream.Collectors;
 
 import static com.zjcc.ccaicodemother.constant.UserConstant.USER_LOGIN_STATE;
 
@@ -83,7 +91,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
         if (userAccount.length() < 4) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "账号错误");
         }
-        if (userPassword.length() < 8) {
+        if (userPassword.length() < 6) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "密码错误");
         }
         // 2. 加密
@@ -117,6 +125,57 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
         // 未登录的人调用登出，什么也破坏不了
         request.getSession().removeAttribute(USER_LOGIN_STATE);
         return true;
+    }
+
+    @Override
+    public UserVO getUserVO(User user) {
+        if (user == null) {
+            return null;
+        }
+        UserVO userVO = new UserVO();
+        BeanUtil.copyProperties(user, userVO);
+        return userVO;
+    }
+
+    @Override
+    public List<UserVO> getUserVOList(List<User> userList) {
+        if (CollUtil.isEmpty(userList)) {
+            return new ArrayList<>();
+        }
+        return userList.stream().map(this::getUserVO).collect(Collectors.toList());
+    }
+
+    @Override
+    public QueryWrapper getQueryWrapper(UserQueryRequest userQueryRequest) {
+        if (userQueryRequest == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "请求参数为空");
+        }
+        Long id = userQueryRequest.getId();
+        String userName = userQueryRequest.getUserName();
+        String userAccount = userQueryRequest.getUserAccount();
+        String userProfile = userQueryRequest.getUserProfile();
+        String userRole = userQueryRequest.getUserRole();
+        String sortField = userQueryRequest.getSortField();
+        String sortOrder = userQueryRequest.getSortOrder();
+        QueryWrapper queryWrapper = new QueryWrapper();
+        // id 为 null 时 MyBatis Flex 自动忽略该条件；空串则必须手动排除，否则会拼出 userRole = ''
+        queryWrapper.eq("id", id);
+        if (StrUtil.isNotBlank(userRole)) {
+            queryWrapper.eq("userRole", userRole);
+        }
+        if (StrUtil.isNotBlank(userAccount)) {
+            queryWrapper.like("userAccount", userAccount);
+        }
+        if (StrUtil.isNotBlank(userName)) {
+            queryWrapper.like("userName", userName);
+        }
+        if (StrUtil.isNotBlank(userProfile)) {
+            queryWrapper.like("userProfile", userProfile);
+        }
+        if (StrUtil.isNotBlank(sortField)) {
+            queryWrapper.orderBy(sortField, "ascend".equals(sortOrder));
+        }
+        return queryWrapper;
     }
 
 }
