@@ -1,5 +1,6 @@
 package com.zjcc.ccaicodemother.service.impl;
 
+import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
@@ -9,9 +10,13 @@ import com.zjcc.ccaicodemother.exception.ThrowUtils;
 import com.zjcc.ccaicodemother.model.entity.User;
 import com.zjcc.ccaicodemother.mapper.UserMapper;
 import com.zjcc.ccaicodemother.model.enums.UserRoleEnum;
+import com.zjcc.ccaicodemother.model.vo.LoginUserVO;
 import com.zjcc.ccaicodemother.service.UserService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
+
+import static com.zjcc.ccaicodemother.constant.UserConstant.USER_LOGIN_STATE;
 
 /**
  * 用户 服务层实现。
@@ -57,6 +62,53 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
         // 盐值，混淆密码
         final String SALT = "zjcc";
         return DigestUtils.md5DigestAsHex((SALT + userPassword).getBytes());
+    }
+
+    @Override
+    public LoginUserVO getLoginUserVO(User user) {
+        if (user == null) {
+            return null;
+        }
+        LoginUserVO loginUserVO = new LoginUserVO();
+        BeanUtil.copyProperties(user, loginUserVO);
+        return loginUserVO;
+    }
+
+    @Override
+    public LoginUserVO userLogin(String userAccount, String userPassword, HttpServletRequest request) {
+        // 1.校验
+        if (StrUtil.hasBlank(userAccount, userPassword)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "参数为空");
+        }
+        if (userAccount.length() < 4) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "账号错误");
+        }
+        if (userPassword.length() < 8) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "密码错误");
+        }
+        // 2. 加密
+        String encryptPassword = getEncryptPassword(userPassword);
+        QueryWrapper queryWrapper = new QueryWrapper();
+        queryWrapper.eq("userAccount", userAccount);
+        queryWrapper.eq("userPassword", encryptPassword);
+        User user = this.mapper.selectOneByQuery(queryWrapper);
+        ThrowUtils.throwIf(user == null, ErrorCode.PARAMS_ERROR, "用户不存在或密码错误");
+        // 3.记录登录用户态
+        request.getSession().setAttribute(USER_LOGIN_STATE, user);
+        return getLoginUserVO(user);
+    }
+
+    @Override
+    public User getLoginUser(HttpServletRequest request) {
+        // 判断是否已登录
+        User currentUser = (User) request.getSession().getAttribute(USER_LOGIN_STATE);
+        if (currentUser == null || currentUser.getId() == null) {
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+        // 查数据库 确认最新状态 （追求性能的话可以直接返回上述结果）
+        currentUser = this.getById(currentUser.getId());
+        ThrowUtils.throwIf(currentUser == null, ErrorCode.NOT_LOGIN_ERROR);
+        return currentUser;
     }
 
 }

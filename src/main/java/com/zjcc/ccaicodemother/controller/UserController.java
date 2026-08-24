@@ -4,14 +4,15 @@ import com.zjcc.ccaicodemother.common.BaseResponse;
 import com.zjcc.ccaicodemother.common.ResultUtils;
 import com.zjcc.ccaicodemother.exception.ErrorCode;
 import com.zjcc.ccaicodemother.exception.ThrowUtils;
+import com.zjcc.ccaicodemother.model.dto.user.UserLoginRequest;
 import com.zjcc.ccaicodemother.model.dto.user.UserRegisterRequest;
+import com.zjcc.ccaicodemother.model.entity.User;
+import com.zjcc.ccaicodemother.model.vo.LoginUserVO;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.annotation.Resource;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.*;
 import com.zjcc.ccaicodemother.service.UserService;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 用户 控制层。
@@ -41,4 +42,25 @@ public class UserController {
         long result = userService.userRegister(userAccount, userPassword, checkPassword);
         return ResultUtils.success(result);
     }
+
+    /**
+     * 用户登录
+     * @param loginRequest 用户登录请求
+     * @param request          请求对象
+     * @return 脱敏后的用户登录信息
+     */
+    @PostMapping("/login")
+    public BaseResponse<LoginUserVO> userLogin(@RequestBody UserLoginRequest loginRequest, HttpServletRequest request) {
+        String userAccount = loginRequest.getUserAccount();
+        String userPassword = loginRequest.getUserPassword();
+        LoginUserVO loginUserVO = userService.userLogin(userAccount, userPassword,request);
+        return ResultUtils.success(loginUserVO);
+    }
+
+    @GetMapping("/get/login")
+    public BaseResponse<LoginUserVO> getLoginUser(HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        return ResultUtils.success(userService.getLoginUserVO(loginUser));
+    }
+
 }
