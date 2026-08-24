@@ -111,4 +111,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
         return currentUser;
     }
 
+    @Override
+    public boolean userLogout(HttpServletRequest request) {
+        // 移除登录态即可；未登录时无需报错（登出是幂等操作，目标就是"未登录"状态）
+        // 未登录的人调用登出，什么也破坏不了
+        request.getSession().removeAttribute(USER_LOGIN_STATE);
+        return true;
+    }
+
 }
