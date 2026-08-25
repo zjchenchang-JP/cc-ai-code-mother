@@ -35,6 +35,20 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- LangChain4j -->
+        <!-- LangChain4j 核心：AiServices / ChatMemory -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>1.19.0</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
+            <version>1.19.0-beta29</version>
+        </dependency>
+
+
         <!-- 数据访问层依赖 -->
         <!-- MyBatis Flex -->
         <dependency>
