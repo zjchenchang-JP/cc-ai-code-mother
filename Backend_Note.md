@@ -473,6 +473,79 @@ class UserControllerTest {
 
 跟教程学习阶段用 `@SpringBootTest` 够用且直观；自己项目追求测试速度时，按"能切片就切片，切片不了才上全量"收紧。
 
+# 2026/08/27
+
+## 一、CodeParser 正则解析：extractHtmlCode 方法与 group(1) 详解
+
+**场景**：AI 返回的是带 Markdown 围栏的文本，`CodeParser` 用正则从中抠出纯代码。
+
+```java
+private static final Pattern HTML_CODE_PATTERN =
+        Pattern.compile("```html\\s*\\n([\\s\\S]*?)```", Pattern.CASE_INSENSITIVE);
+
+private static String extractHtmlCode(String content) {
+    Matcher matcher = HTML_CODE_PATTERN.matcher(content);  // ① 正则绑定目标文本，得到匹配器
+    if (matcher.find()) {                                  // ② 找下一个匹配，找到返回 true
+        return matcher.group(1);                           // ③ 取第 1 个捕获组（纯代码）
+    }
+    return null;                                           // ④ 没有代码块 → null
+}
+```
+
+### 正则逐段拆解（对着 AI 返回的 ```html 代码块看）
+
+| 正则片段 | 匹配什么 |
+|---|---|
+| ` ```html ` | 字面量：三个反引号 + html |
+| ` \s* ` | 任意空白 0+ 个（容忍行尾空格） |
+| ` \n ` | 换行符 |
+| ` ( ... ) ` | **捕获组**：把这段内容"装进抽屉"，供 group(1) 取 |
+| ` [\s\S] ` | 空白或非空白 = 任意字符**含换行**（`.` 默认不匹配换行，多行代码必须用它） |
+| ` *? ` | **懒惰量词**：尽量少匹配，到第一个 ` ``` ` 就停（贪婪 `*` 会吞到下一个代码块） |
+| `CASE_INSENSITIVE` | 大小写不敏感，` ```HTML ` 也能匹配 |
+
+### group(0) 与 group(1) 的区别
+
+group 不是"智能识别哪段是代码"，而是**括号位置决定的手动贴标签**：
+
+```
+命中整体：  ```html\n<!DOCTYPE html>...</html>\n```
+            └────────── group(0)：整个匹配（含围栏）──────────┘
+            ```html\n  <!DOCTYPE html>...</html>  \n```
+            ──围栏──     └──── group(1)：括号围住的代码 ────┘   ──围栏──
+```
+
+- `group(0)`：整个匹配，**规范固定白送，不算捕获组**；
+- `group(1)`：正则里**从左数第 1 个 `(`** 包住的内容——是代码，纯粹因为括号恰好套在那里。
+
+### 捕获组编号规则与数量
+
+- **捕获组数量 = 未转义的 `(` 的个数**（`matcher.groupCount()` 可查，不含 group 0）；
+- 编号按左括号出现顺序：第 1 个 `(` → group(1)，第 2 个 → group(2)…
+
+```java
+// 多组验证编号
+Pattern.compile("(\\d{4})-(\\d{2})").matcher("日期是 2026-08-26")
+group(0) → "2026-08-26"（整个匹配）
+group(1) → "2026"（第1个括号）
+group(2) → "08"（第2个括号）
+```
+
+- **`(?:` 非捕获组**：只要分组功能（如 `js|javascript` 多选一），不占编号、不建抽屉。项目里 JS 正则 ```` ```(?:js|javascript)\s*\n([\s\S]*?)``` ```` 虽有两对括号，但 `(?:...)` 不算，所以依然只有 1 个捕获组。
+
+### Java 正则三件套
+
+| 角色 | 职责 |
+|---|---|
+| `Pattern` | 正则编译产物，可复用（所以提成 `static final`，只编译一次） |
+| `Matcher` | 绑定目标文本的匹配状态机，负责 find / group |
+| `find()` vs `matches()` | find 找**子串**（可滚动多次）；matches 要求匹配**整个**字符串 |
+
+### 防御性设计
+
+`parseHtmlCode` 在 `group(1)` 为 null 时**把整段原文当 HTML 兜底**——prompt 强制了格式，但代码层不信任 LLM 输出，永远留 fallback。这是处理 LLM 输出的通用姿势。
+
+
 
 
 
