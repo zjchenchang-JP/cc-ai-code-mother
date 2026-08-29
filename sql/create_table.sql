@@ -30,7 +30,8 @@ create table if not exists user
     INDEX idx_userName (userName)
     ) comment '用户' collate = utf8mb4_unicode_ci;
 
--- 应用表
+-- 应用表 记录应用的基本信息、生成配置、部署信息
+-- priority 优先级字段：我们约定 99 表示精选应用，这样可以在主页展示高质量的应用，避免用户看到大量测试内容
 create table app
 (
     id           bigint auto_increment comment 'id' primary key,

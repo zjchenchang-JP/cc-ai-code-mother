@@ -73,6 +73,20 @@ class AiCodeGeneratorFacadeTest {
     }
 
     @Test
+    void generateAndSaveCodeStreamWithMultiFile() {
+        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream("任务记录网站", CodeGenTypeEnum.MULTI_FILE);
+        // 阻塞等待所有数据收集完成（doOnComplete 的保存动作先于 block() 返回执行）
+        List<String> result = codeStream.collectList().block();
+        Assertions.assertNotNull(result);
+        // 拼接流式片段，得到完整内容
+        String completeContent = String.join("", result);
+        assertFalse(completeContent.isBlank(), "流式内容不应为空");
+        // 流结束后应已落盘：保存根目录下存在 html_ 开头的目录
+        Optional<File> savedDir = findLatestSavedDir("html_");
+        Assertions.assertTrue(savedDir.isPresent(), "流式完成后应生成保存目录");
+    }
+
+    @Test
     void generateAndSaveCodeRejectsNullType() {
         // 不消耗 AI 额度：类型为空直接被拦截
         BusinessException exception = assertThrows(BusinessException.class,
