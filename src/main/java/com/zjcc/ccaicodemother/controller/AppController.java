@@ -1,17 +1,25 @@
 package com.zjcc.ccaicodemother.controller;
 
 import com.mybatisflex.core.paginate.Page;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.zjcc.ccaicodemother.annotation.AuthCheck;
+import com.zjcc.ccaicodemother.common.BaseResponse;
+import com.zjcc.ccaicodemother.common.DeleteRequest;
+import com.zjcc.ccaicodemother.common.ResultUtils;
+import com.zjcc.ccaicodemother.constant.AppConstant;
+import com.zjcc.ccaicodemother.constant.UserConstant;
+import com.zjcc.ccaicodemother.exception.BusinessException;
+import com.zjcc.ccaicodemother.exception.ErrorCode;
+import com.zjcc.ccaicodemother.exception.ThrowUtils;
+import com.zjcc.ccaicodemother.model.dto.app.*;
 import com.zjcc.ccaicodemother.model.entity.App;
+import com.zjcc.ccaicodemother.model.entity.User;
+import com.zjcc.ccaicodemother.model.vo.AppVO;
 import com.zjcc.ccaicodemother.service.AppService;
-import org.springframework.web.bind.annotation.RestController;
+import com.zjcc.ccaicodemother.service.UserService;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.*;
+
 import java.util.List;
 
 /**
@@ -23,72 +31,215 @@ import java.util.List;
 @RequestMapping("/app")
 public class AppController {
 
-    @Autowired
+    /**
+     * 用户端分页查询每页最大条数 20
+     */
+    private static final int MAX_PAGE_SIZE = 20;
+
+    @Resource
     private AppService appService;
 
+    @Resource
+    private UserService userService;
+
     /**
-     * 保存应用。
+     * 创建应用
      *
-     * @param app 应用
-     * @return {@code true} 保存成功，{@code false} 保存失败
+     * @param appAddRequest 创建应用请求（须填写 initPrompt）
+     * @param request       请求对象
+     * @return 新应用 id
      */
-    @PostMapping("save")
-    public boolean save(@RequestBody App app) {
-        return appService.save(app);
+    @PostMapping("/add")
+    public BaseResponse<Long> addApp(@RequestBody AppAddRequest appAddRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(appAddRequest == null, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+        long result = appService.addApp(appAddRequest, loginUser);
+        return ResultUtils.success(result);
     }
 
     /**
-     * 根据主键删除应用。
+     * 修改应用（目前仅支持修改应用名称，仅本人或管理员可操作）
      *
-     * @param id 主键
-     * @return {@code true} 删除成功，{@code false} 删除失败
+     * @param appUpdateRequest 更新应用请求
+     * @param request          请求对象
+     * @return 是否更新成功
      */
-    @DeleteMapping("remove/{id}")
-    public boolean remove(@PathVariable Long id) {
-        return appService.removeById(id);
+    @PostMapping("/update")
+    public BaseResponse<Boolean> updateApp(@RequestBody AppUpdateRequest appUpdateRequest, HttpServletRequest request) {
+        if (appUpdateRequest == null || appUpdateRequest.getId() == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        User loginUser = userService.getLoginUser(request);
+        boolean result = appService.updateApp(appUpdateRequest, loginUser);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        return ResultUtils.success(result);
     }
 
     /**
-     * 根据主键更新应用。
+     * 更新任意应用（仅管理员，支持更新应用名称、应用封面、优先级）
      *
-     * @param app 应用
-     * @return {@code true} 更新成功，{@code false} 更新失败
+     * @param adminUpdateRequest 管理员更新应用请求
+     * @return 是否更新成功
      */
-    @PutMapping("update")
-    public boolean update(@RequestBody App app) {
-        return appService.updateById(app);
+    @PostMapping("/admin/update")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> updateAppByAdmin(@RequestBody AppAdminUpdateRequest adminUpdateRequest) {
+        if (adminUpdateRequest == null || adminUpdateRequest.getId() == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        boolean result = appService.editApp(adminUpdateRequest);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        return ResultUtils.success(true);
     }
 
     /**
-     * 查询所有应用。
+     * 根据 id 删除应用（用户只能删除自己的应用）
      *
-     * @return 所有数据
+     * @param deleteRequest 删除请求
+     * @param request       请求对象
+     * @return 是否删除成功
      */
-    @GetMapping("list")
-    public List<App> list() {
-        return appService.list();
+    @PostMapping("/delete")
+    public BaseResponse<Boolean> deleteApp(@RequestBody DeleteRequest deleteRequest, HttpServletRequest request) {
+        if (deleteRequest == null || deleteRequest.getId() <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        User loginUser = userService.getLoginUser(request);
+        boolean result = appService.deleteApp(deleteRequest.getId(), loginUser);
+        return ResultUtils.success(result);
     }
 
     /**
-     * 根据主键获取应用。
+     * 根据 id 查看应用详情（仅本人或管理员可查看）
      *
-     * @param id 应用主键
+     * @param id      应用 id
+     * @param request 请求对象
      * @return 应用详情
      */
-    @GetMapping("getInfo/{id}")
-    public App getInfo(@PathVariable Long id) {
-        return appService.getById(id);
+    @GetMapping("/get")
+    public BaseResponse<App> getAppById(long id, HttpServletRequest request) {
+        ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+        App app = appService.getAppById(id, loginUser);
+        return ResultUtils.success(app);
     }
 
     /**
-     * 分页查询应用。
+     * 根据 id 获取脱敏后的应用信息（无需登录，不含 initPrompt）
      *
-     * @param page 分页对象
-     * @return 分页对象
+     * @param id 应用 id
+     * @return 脱敏后的应用信息
      */
-    @GetMapping("page")
-    public Page<App> page(Page<App> page) {
-        return appService.page(page);
+    @GetMapping("/get/vo")
+    public BaseResponse<AppVO> getAppVOById(long id) {
+        ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
+        App app = appService.getById(id);
+        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
+        return ResultUtils.success(appService.getAppVO(app));
+    }
+
+    /**
+     * 分页查询我的应用列表（支持根据名称查询）
+     *
+     * @param appQueryRequest 查询请求参数
+     * @param request         请求对象
+     * @return 应用分页列表
+     */
+    @PostMapping("/my/list/page/vo")
+    public BaseResponse<Page<AppVO>> listMyAppByPage(@RequestBody AppQueryRequest appQueryRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(appQueryRequest == null, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+        long pageNum = appQueryRequest.getPageNum();
+        long pageSize = appQueryRequest.getPageSize();
+        ThrowUtils.throwIf(pageSize > MAX_PAGE_SIZE, ErrorCode.PARAMS_ERROR, "每页最多查询 20 个应用");
+        // 强制只查询当前用户自己的应用
+        appQueryRequest.setUserId(loginUser.getId());
+        Page<App> appPage = appService.page(Page.of(pageNum, pageSize), appService.getQueryWrapper(appQueryRequest));
+        // 数据脱敏
+        Page<AppVO> appVOPage = new Page<>(pageNum, pageSize, appPage.getTotalRow());
+        List<AppVO> appVOList = appService.getAppVOList(appPage.getRecords());
+        appVOPage.setRecords(appVOList);
+        return ResultUtils.success(appVOPage);
+    }
+
+    /**
+     * 分页查询精选应用（支持根据名称查询，约定 priority 为 99 的应用为精选应用）
+     *
+     * @param appQueryRequest 查询请求参数
+     * @return 精选应用分页列表
+     */
+    @PostMapping("/good/list/page/vo")
+    public BaseResponse<Page<AppVO>> listGoodAppVOByPage(@RequestBody AppQueryRequest appQueryRequest) {
+        ThrowUtils.throwIf(appQueryRequest == null, ErrorCode.PARAMS_ERROR);
+        long pageNum = appQueryRequest.getPageNum();
+        long pageSize = appQueryRequest.getPageSize();
+        ThrowUtils.throwIf(pageSize > MAX_PAGE_SIZE, ErrorCode.PARAMS_ERROR, "每页最多查询 20 个应用");
+        // 只查询精选应用
+        appQueryRequest.setPriority(AppConstant.GOOD_APP_PRIORITY);
+        // 分页查询
+        Page<App> appPage = appService.page(Page.of(pageNum, pageSize), appService.getQueryWrapper(appQueryRequest));
+        // 数据脱敏
+        Page<AppVO> appVOPage = new Page<>(pageNum, pageSize, appPage.getTotalRow());
+        List<AppVO> appVOList = appService.getAppVOList(appPage.getRecords());
+        appVOPage.setRecords(appVOList);
+        return ResultUtils.success(appVOPage);
+    }
+
+    /**
+     * 管理员删除应用
+     *
+     * @param deleteRequest 删除请求
+     * @return 删除结果
+     */
+    @PostMapping("/admin/delete")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> deleteAppByAdmin(@RequestBody DeleteRequest deleteRequest) {
+        if (deleteRequest == null || deleteRequest.getId() <= 0) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        long id = deleteRequest.getId();
+        // 判断是否存在
+        App oldApp = appService.getById(id);
+        ThrowUtils.throwIf(oldApp == null, ErrorCode.NOT_FOUND_ERROR);
+        boolean result = appService.removeById(id);
+        return ResultUtils.success(result);
+    }
+
+    /**
+     * 管理员分页获取应用列表（仅管理员，支持根据除时间外的任何字段查询）
+     *
+     * @param appQueryRequest 查询请求参数
+     * @return 应用分页列表
+     */
+    @PostMapping("/admin/list/page/vo")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Page<AppVO>> listAppByPage(@RequestBody AppQueryRequest appQueryRequest) {
+        ThrowUtils.throwIf(appQueryRequest == null, ErrorCode.PARAMS_ERROR);
+        long pageNum = appQueryRequest.getPageNum();
+        long pageSize = appQueryRequest.getPageSize();
+        Page<App> appPage = appService.page(Page.of(pageNum, pageSize), appService.getQueryWrapper(appQueryRequest));
+        // 数据封装
+        Page<AppVO> appVOPage = new Page<>(pageNum, pageSize, appPage.getTotalRow());
+        List<AppVO> appVOList = appService.getAppVOList(appPage.getRecords());
+        appVOPage.setRecords(appVOList);
+        return ResultUtils.success(appVOPage);
+    }
+
+    /**
+     * 管理员根据 id 获取应用详情
+     *
+     * @param id 应用 id
+     * @return 应用详情
+     */
+    @GetMapping("/admin/get/vo")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<AppVO> getAppVOByIdByAdmin(long id) {
+        ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
+        // 查询数据库
+        App app = appService.getById(id);
+        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
+        // 获取封装类
+        return ResultUtils.success(appService.getAppVO(app));
     }
 
 }
