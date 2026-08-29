@@ -36,7 +36,7 @@ class AiCodeGeneratorFacadeTest {
 
     @Test
     void generateAndSaveCodeWithHtml() {
-        File file = aiCodeGeneratorFacade.generateAndSaveCode("简易个人博客", CodeGenTypeEnum.HTML);
+        File file = aiCodeGeneratorFacade.generateAndSaveCode("简易个人博客", CodeGenTypeEnum.HTML,1L);
         // 目录已创建
         Assertions.assertNotNull(file);
         Assertions.assertTrue(file.exists());
@@ -49,7 +49,7 @@ class AiCodeGeneratorFacadeTest {
 
     @Test
     void generateAndSaveCodeWithMultiFile() {
-        File file = aiCodeGeneratorFacade.generateAndSaveCode("任务记录网站", CodeGenTypeEnum.MULTI_FILE);
+        File file = aiCodeGeneratorFacade.generateAndSaveCode("任务记录网站", CodeGenTypeEnum.MULTI_FILE,1L);
         Assertions.assertNotNull(file);
         Assertions.assertTrue(file.exists());
         // 目录名以 multi_file_ 开头
@@ -60,7 +60,7 @@ class AiCodeGeneratorFacadeTest {
 
     @Test
     void generateAndSaveCodeStreamWithHtml() {
-        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream("任务记录网站", CodeGenTypeEnum.HTML);
+        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream("任务记录网站", CodeGenTypeEnum.HTML,1L);
         // 阻塞等待所有数据收集完成（doOnComplete 的保存动作先于 block() 返回执行）
         List<String> result = codeStream.collectList().block();
         Assertions.assertNotNull(result);
@@ -74,7 +74,7 @@ class AiCodeGeneratorFacadeTest {
 
     @Test
     void generateAndSaveCodeStreamWithMultiFile() {
-        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream("任务记录网站", CodeGenTypeEnum.MULTI_FILE);
+        Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream("任务记录网站", CodeGenTypeEnum.MULTI_FILE,1L);
         // 阻塞等待所有数据收集完成（doOnComplete 的保存动作先于 block() 返回执行）
         List<String> result = codeStream.collectList().block();
         Assertions.assertNotNull(result);
@@ -90,14 +90,14 @@ class AiCodeGeneratorFacadeTest {
     void generateAndSaveCodeRejectsNullType() {
         // 不消耗 AI 额度：类型为空直接被拦截
         BusinessException exception = assertThrows(BusinessException.class,
-                () -> aiCodeGeneratorFacade.generateAndSaveCode("测试", null));
+                () -> aiCodeGeneratorFacade.generateAndSaveCode("测试", null,1L));
         assertNotNull(exception.getMessage());
     }
 
     @Test
     void generateAndSaveCodeStreamRejectsNullType() {
         BusinessException exception = assertThrows(BusinessException.class,
-                () -> aiCodeGeneratorFacade.generateAndSaveCodeStream("测试", null));
+                () -> aiCodeGeneratorFacade.generateAndSaveCodeStream("测试", null,1L));
         assertNotNull(exception.getMessage());
     }
 

@@ -6,6 +6,7 @@ import com.zjcc.ccaicodemother.model.dto.app.*;
 import com.zjcc.ccaicodemother.model.entity.App;
 import com.zjcc.ccaicodemother.model.entity.User;
 import com.zjcc.ccaicodemother.model.vo.AppVO;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -83,4 +84,14 @@ public interface AppService extends IService<App> {
      * @return 查询参数
      */
     QueryWrapper getQueryWrapper(AppQueryRequest appQueryRequest);
+
+    /**
+     * 通过对话生成应用代码
+     *
+     * @param appId     应用 ID
+     * @param message   提示词
+     * @param loginUser 登录用户
+     * @return
+     */
+    Flux<String> chatToGenCode(Long appId, String message, User loginUser);
 }
