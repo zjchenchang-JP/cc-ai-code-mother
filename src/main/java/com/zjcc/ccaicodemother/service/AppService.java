@@ -94,4 +94,15 @@ public interface AppService extends IService<App> {
      * @return
      */
     Flux<String> chatToGenCode(Long appId, String message, User loginUser);
+
+    /**
+     * 应用部署
+     * 支持重复部署。如果应用已经有 deployKey，就直接使用现有的；
+     * 如果没有，就生成一个新的。这样既保证了 URL 的稳定性，又支持了代码的更新。
+     * 缺点是不支持区分同一个应用多次部署的版本
+     * @param appId     应用 ID
+     * @param loginUser 登录用户
+     * @return 可访问的部署地址
+     */
+    String deployApp(Long appId, User loginUser);
 }
