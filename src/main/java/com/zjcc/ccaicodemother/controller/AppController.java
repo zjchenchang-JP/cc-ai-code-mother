@@ -1,6 +1,7 @@
 package com.zjcc.ccaicodemother.controller;
 
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONUtil;
 import com.mybatisflex.core.paginate.Page;
 import com.zjcc.ccaicodemother.annotation.AuthCheck;
 import com.zjcc.ccaicodemother.common.BaseResponse;
@@ -20,10 +21,13 @@ import com.zjcc.ccaicodemother.service.UserService;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 应用 控制层。
@@ -254,7 +258,7 @@ public class AppController {
      * @return 生成结果流
      */
     @GetMapping(value = "/chat/gen/code", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> chatToGenCode(@RequestParam Long appId,
+    public Flux<ServerSentEvent<String>> chatToGenCode(@RequestParam Long appId,
                                       @RequestParam String message,
                                       HttpServletRequest request) {
         // 参数校验
@@ -263,7 +267,27 @@ public class AppController {
         // 获取当前登录用户
         User loginUser = userService.getLoginUser(request);
         // 调用服务生成代码（流式）
-        return appService.chatToGenCode(appId, message, loginUser);
+        Flux<String> contentFlux  = appService.chatToGenCode(appId, message, loginUser);
+        return contentFlux.map(chunk -> {
+            // 将内容包装成JSON对象
+            // 前端使用 EventSource(只有onerror 没有onclose) 对接目前的接口时，会出现空格丢失问题
+            // Flux 额外封装成 ServerSentEvent，把原始数据放到 JSON 的 d 字段内
+            Map<String, String> wrapper = Map.of("d", chunk);
+            String jsonData = JSONUtil.toJsonStr(wrapper);
+            return ServerSentEvent.<String>builder()
+                    .data(jsonData)
+                    .build();
+        }).concatWith(Mono.just(
+                // 发送结束事件
+                // SSE中，当服务器关闭连接时，会触发客户端的 onclose 事件
+                // 但 onclose事件 会在连接正常结束（服务器主动关闭）和异常中断（如网络问题）时都触发
+                // 在后端添加一个明确的 done 事件，这样可以更清晰地区分流的正常结束和异常中断
+                // 收到响应后 前端需要从 data 块中取出数据，并通过 event == done 判断事件结束
+                ServerSentEvent.<String>builder()
+                        .event("done")
+                        .data("")
+                        .build()
+        ));
     }
 
 
