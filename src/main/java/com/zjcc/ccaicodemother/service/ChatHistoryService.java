@@ -1,7 +1,13 @@
 package com.zjcc.ccaicodemother.service;
 
+import com.mybatisflex.core.paginate.Page;
+import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.core.service.IService;
+import com.zjcc.ccaicodemother.model.dto.chathistory.ChatHistoryQueryRequest;
 import com.zjcc.ccaicodemother.model.entity.ChatHistory;
+import com.zjcc.ccaicodemother.model.entity.User;
+
+import java.time.LocalDateTime;
 
 /**
  * 对话历史 服务层。
@@ -28,4 +34,25 @@ public interface ChatHistoryService extends IService<ChatHistory> {
      * @return
      */
     boolean deleteByAppId(Long appId);
+
+    /**
+     * 构造查询条件
+     *
+     * @param chatHistoryQueryRequest
+     * @return
+     */
+    QueryWrapper getQueryWrapper(ChatHistoryQueryRequest chatHistoryQueryRequest);
+
+    /**
+     * 分页查询某 APP 的对话记录
+     *
+     * @param appId
+     * @param pageSize
+     * @param lastCreateTime
+     * @param loginUser
+     * @return
+     */
+    Page<ChatHistory> listAppChatHistoryByPage(Long appId, int pageSize,
+                                               LocalDateTime lastCreateTime,
+                                               User loginUser);
 }
