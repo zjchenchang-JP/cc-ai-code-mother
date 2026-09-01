@@ -2,6 +2,7 @@ package com.zjcc.ccaicodemother.ai;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.zjcc.ccaicodemother.service.ChatHistoryService;
 import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
@@ -9,6 +10,7 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.service.AiServices;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -31,12 +33,16 @@ public class AiCodeGeneratorServiceFactory {
     @Resource // 会话记忆
     private RedisChatMemoryStore redisChatMemoryStore;
 
+    @Resource
+    private ChatHistoryService chatHistoryService;
+
     /**
-     * AI 服务实例缓存
+     * AI 服务实例缓存 性能优化
      * 缓存策略：
      * - 最大缓存 1000 个实例
      * - 写入后 30 分钟过期
      * - 访问后 10 分钟过期
+     * 把每轮对话的“查库+灌 Redis”变成每 app 每10分钟聊天周期一次，数据库和 Redis 的负载显著下降；而用户侧的等待时间依旧由 AI 推理独占。缓存最常见的真实收益形态：救基础设施，不救体感
      */
     private final Cache<Long, AiCodeGeneratorService> serviceCache = Caffeine.newBuilder()
             .maximumSize(1000)
@@ -46,6 +52,7 @@ public class AiCodeGeneratorServiceFactory {
                 log.debug("AI 服务实例被移除，appId: {}, 原因: {}", key, cause);
             })
             .build();
+
 
     /**
      * 根据 appId 获取服务（带缓存）
@@ -70,6 +77,10 @@ public class AiCodeGeneratorServiceFactory {
                 .chatMemoryStore(redisChatMemoryStore)
                 .maxMessages(20)
                 .build();
+        // 初始化AI Service 对话记忆 从数据库加载历史对话到记忆中
+        // MessageWindowChatMemory.add() 每加一条消息都会“读出整窗→追加→整窗写回”，20 条历史就是几十次 Redis 往返
+        // 每次调用loadChatHistoryToMemory：MySQL 查询 + clear + 20×Redis 读 + 20×Redis 写
+        chatHistoryService.loadChatHistoryToMemory(appId, chatMemory, 20);
         return AiServices.builder(AiCodeGeneratorService.class)
                 .chatModel(chatModel)
                 .streamingChatModel(streamingChatModel)
