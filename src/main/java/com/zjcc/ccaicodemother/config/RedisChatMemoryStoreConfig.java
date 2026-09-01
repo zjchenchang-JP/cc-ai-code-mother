@@ -18,8 +18,6 @@ public class RedisChatMemoryStoreConfig {
 
     private int port;
 
-    private String password;
-
     private long ttl;
 
     @Bean
@@ -27,7 +25,6 @@ public class RedisChatMemoryStoreConfig {
         return RedisChatMemoryStore.builder()
                 .host(host)
                 .port(port)
-                .password(password)
                 .ttl(ttl)
                 .build();
     }
