@@ -61,6 +61,13 @@
         </dependency>
 
 
+        <!-- 本地缓存 -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
+
 
         <!-- 数据访问层依赖 -->
         <!-- MyBatis Flex -->
