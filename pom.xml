@@ -46,12 +46,12 @@
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j</artifactId>
-            <version>1.19.0</version>
+            <version>1.1.0</version>
         </dependency>
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
-            <version>1.19.0-beta29</version>
+            <version>1.1.0-beta7</version>
         </dependency>
         <!-- Reactor 响应式编程 把 AI 返回的内容封装为更通用的 Flux 响应式流对象-->
         <dependency>
