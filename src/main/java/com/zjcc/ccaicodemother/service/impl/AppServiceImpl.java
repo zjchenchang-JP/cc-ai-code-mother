@@ -25,6 +25,7 @@ import com.zjcc.ccaicodemother.model.vo.AppVO;
 import com.zjcc.ccaicodemother.model.vo.UserVO;
 import com.zjcc.ccaicodemother.service.AppService;
 import com.zjcc.ccaicodemother.service.ChatHistoryService;
+import com.zjcc.ccaicodemother.service.ScreenshotService;
 import com.zjcc.ccaicodemother.service.UserService;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -59,7 +60,11 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     @Resource
     private StreamHandlerExecutor streamHandlerExecutor;
     @Resource
+
     private VueProjectBuilder vueProjectBuilder;
+
+    @Resource
+    private ScreenshotService screenshotService;
 
     @Override
     public long addApp(AppAddRequest appAddRequest, User loginUser) {
@@ -346,10 +351,12 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         app.setId(appId);
         boolean result = this.updateById(app);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新应用部署信息失败");
-        // 10. 返回可访问的 URL
-        return String.format("%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
+        // 10. 构建应用访问 URL
+        String appDeployUrl = String.format("%s/%s/", AppConstant.CODE_DEPLOY_HOST, deployKey);
+        // 11. 异步生成截图并更新应用封面
+        generateAppScreenshotAsync(appId, appDeployUrl);
+        return appDeployUrl;
     }
-
 
     /**
      * 判断用户是否为管理员
@@ -359,6 +366,27 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
      */
     private boolean isAdmin(User user) {
         return UserConstant.ADMIN_ROLE.equals(user.getUserRole());
+    }
+
+    /**
+     * 异步生成应用截图并更新封面
+     * 截图生成是一个相对耗时的操作，我们必须使用异步方式处理，避免阻塞用户的部署流程
+     * @param appId  应用ID
+     * @param appUrl 应用访问URL
+     */
+    @Override
+    public void generateAppScreenshotAsync(Long appId, String appUrl) {
+        // 使用虚拟线程异步执行
+        Thread.startVirtualThread(() -> {
+            // 调用截图服务生成截图并上传
+            String screenshotUrl = screenshotService.generateAndUploadScreenshot(appUrl);
+            // 更新数据库的封面字段
+            App app = new App();
+            app.setId(appId);
+            app.setCover(screenshotUrl);
+            boolean result = this.updateById(app);
+            ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "更新应用封面字段失败");
+        });
     }
 
 }
