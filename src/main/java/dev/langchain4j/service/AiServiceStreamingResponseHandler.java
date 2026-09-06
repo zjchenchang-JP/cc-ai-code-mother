@@ -107,8 +107,11 @@ class AiServiceStreamingResponseHandler implements StreamingChatResponseHandler 
 
     @Override
     public void onPartialToolExecutionRequest(int index, ToolExecutionRequest partialToolExecutionRequest) {
-        // If we're using output guardrails, then buffer the partial response until the guardrails have completed
-        partialToolExecutionRequestHandler.accept(index, partialToolExecutionRequest);
+        // Flux 等消费者未注册补丁回调时该 handler 为 null，必须判空
+        if (partialToolExecutionRequestHandler != null) {
+            // If we're using output guardrails, then buffer the partial response until the guardrails have completed
+            partialToolExecutionRequestHandler.accept(index, partialToolExecutionRequest);
+        }
     }
 
     @Override
