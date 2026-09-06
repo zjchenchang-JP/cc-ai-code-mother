@@ -697,6 +697,147 @@ AiCodeGeneratorService aiCodeGeneratorService =
 3. **排障路径**：AI 行为异常（现象）→ 中间件证据（记忆/日志）→ 服务端配置（工厂注册）→ 调用方（Facade 传参）——本次 bug 的病灶在最后一环，前两环都是"看起来正常"的假象
 4. **@SystemMessage 挂在接口方法上，所有实例共享**——"提示词对"不能证明"实例对"，能力差异（tools/模型）在 builder 里，不在方法上
 
+# 2026/09/06
+
+## 一、网页截图失败 ERR_CONNECTION_REFUSED：Nginx 没在运行排障实录
+
+### 现象
+
+knife4j 调 `POST /api/app/deploy`（appId=454038540256083968）后，**deploy 接口本身返回成功**，但后台日志报：
+
+```
+ERROR WebScreenshotUtils : 网页截图失败: http://localhost/6dLTVZ/
+org.openqa.selenium.WebDriverException: unknown error: net::ERR_CONNECTION_REFUSED
+  (Session info: chrome=139.0...)
+    at WebScreenshotUtils.saveWebPageScreenshot(WebScreenshotUtils.java:65)
+    at ScreenshotServiceImpl.generateAndUploadScreenshot(ScreenshotServiceImpl.java:31)
+    at AppServiceImpl.lambda$generateAppScreenshotAsync$1(AppServiceImpl.java:382)   ← virtual-60 虚拟线程
+Exception: BusinessException: 本地截图生成失败
+```
+
+疑点：这个 URL 之前浏览器明明能访问。
+
+### 为什么首先排除"腾讯云 COS 跨域"
+
+**跨域（CORS）是浏览器侧的概念**：页面已经加载出来了，其中资源请求另一个域被拦——错误形态是 CORS 报错、资源加载失败，页面本身打得开。
+
+而这里的错误是 `net::ERR_CONNECTION_REFUSED`——**TCP 连接建立不起来**，发生在 Chrome 打开 `http://localhost/6dLTVZ/` 这一步，**截图还没生成、更没走到上传 COS**。错误链位置：
+
+```
+deploy 返回 URL → Chrome 打开 URL（★死在这：连接被拒）→ 截图 → 上传 COS（跨域问题在这才可能出现）
+```
+
+**排除法口诀：ERR_CONNECTION_REFUSED = 端口没人听 ≠ 跨域**。
+
+### 为什么定位到 Nginx
+
+这个 URL 的完整依赖链：
+
+```
+http://localhost/6dLTVZ/（80 端口）
+   ↓ 谁在 80 端口听？→ Nginx（root 指向 tmp/code_deploy 的那段配置）
+   ↓ Nginx 把 /6dLTVZ/ 映射到 code_deploy/6dLTVZ/ 目录伺服静态文件
+```
+
+"之前能访问"说明那时 Nginx 活着；现在 CONNECTION_REFUSED 说明 **80 端口没人监听**。且 Nginx 是独立进程，**不随 Java 应用启动**——重启电脑/手动关闭/进程退出都会让它消失，而 Java 侧毫无感知（直到截图这种"回访"动作才暴露）。
+
+### 验证与修复全流程（实际执行）
+
+**① 确认 Nginx 死亡 + 80 端口空置**：
+
+```cmd
+:: Windows
+tasklist | findstr -i nginx        → 无输出（进程不在）
+netstat -ano | findstr ":80 " | findstr LISTENING   → 无输出（端口没人听）
+```
+
+```bash
+# Linux 对照版
+ps aux | grep nginx                # 或 systemctl status nginx
+sudo ss -tlnp | grep ':80 '        # 或 sudo netstat -tlnp | grep ':80 '
+```
+
+**② 找到 Nginx 安装目录**（忘了装哪了）：
+
+```cmd
+where nginx                                        :: 查 PATH
+wmic process where "name like '%nginx%'" get ExecutablePath   :: 查历史进程路径（已死则无果）
+find /d /e -maxdepth 3 -iname "*nginx*"           :: 全盘浅层搜索
+```
+
+实际结果：`D:\WorkSpaceCC\Nginx\nginx-1.30.4`。
+
+**③ 启动前先验证配置语法**（好习惯，防起不来）：
+
+```cmd
+cd /d D:\WorkSpaceCC\Nginx\nginx-1.30.4
+nginx.exe -t
+:: → syntax is ok / test is successful
+```
+
+```bash
+# Linux 对照版
+sudo nginx -t
+```
+
+**④ 启动并三重验证**：
+
+```cmd
+nginx.exe                          :: 启动（两个进程 = master + worker，正常形态）
+tasklist | findstr -i nginx        :: → nginx.exe 出现两行 ✅
+netstat -ano | findstr ":80 "      :: → 0.0.0.0:80 LISTENING ✅
+curl -o nul -w "%{http_code}" http://localhost/6dLTVZ/   :: → 200 ✅
+```
+
+```bash
+# Linux 对照版
+sudo systemctl start nginx         # 或直接 nginx
+sudo systemctl status nginx
+curl -o /dev/null -s -w "%{http_code}" http://localhost/6dLTVZ/
+```
+
+修好后重新调 deploy，截图链路走通。
+
+### Nginx 常用命令速查（Windows / Linux 对照）
+
+| 操作 | Windows（nginx 目录下） | Linux |
+|---|---|---|
+| 启动 | `start nginx` 或 `nginx.exe` | `nginx` 或 `systemctl start nginx` |
+| 停止（优雅） | `nginx -s quit` | `nginx -s quit` 或 `systemctl stop nginx` |
+| 立即停止 | `nginx -s stop` | `nginx -s stop` |
+| 重载配置（不中断服务） | `nginx -s reload` | `nginx -s reload` |
+| 测试配置语法 | `nginx -t` | `nginx -t` |
+| 查版本 | `nginx -v` | `nginx -v` |
+| 查进程 | `tasklist \| findstr -i nginx` | `ps aux \| grep nginx` |
+| 查端口 | `netstat -ano \| findstr ":80 "` | `ss -tlnp \| grep ':80 '` |
+| 日志位置 | `logs\error.log`、`logs\access.log` | `/var/log/nginx/` |
+
+注意：Windows 下 `nginx -s` 命令**必须在 nginx 安装目录执行**（它按相对路径找 pid 文件）。
+
+### 长效方案：开机自启（已实施方案 A）
+
+**方案 A（已做）——启动文件夹放 bat**：`Win+R → shell:startup`，放入 `start-nginx.bat`：
+
+```bat
+@echo off
+cd /d D:\WorkSpaceCC\Nginx\nginx-1.30.4
+start "" nginx.exe
+```
+
+登录即自动拉起。局限：仅在用户登录时启动。
+
+**方案 B（未做，更生产）——注册 Windows 服务**：用 WinSW 或 NSSM 把 nginx 包装成系统服务，开机自启 + 崩溃自动重启，不依赖用户登录。
+
+**方案 C——手动**：重启后记得先开 Nginx（本次踩的坑就是忘了它不会自己活过来）。
+
+### 经验沉淀
+
+1. **ERR_CONNECTION_REFUSED ≠ 跨域**——连接层错误先查"端口有没有人听"，别急着查 CORS/证书这些应用层配置
+2. **异步链路的故障定位要看栈**：日志里 `virtual-60 / VirtualThread.run` + lambda 栈说明是 deploy 后台的虚拟线程异步截图任务在报错——**deploy 主流程没失败**，但封面图不会生成
+3. **基础设施进程（Nginx/Redis/MySQL）不会随应用自动复活**——"之前是好的"只说明"之前它活着"，重启后要逐个确认；涉及它们的依赖（部署 URL、截图）都会在重启后集中爆雷
+4. **Selenium 截图本质是"Chrome 回访 URL"**——它对 URL 可达性的要求和浏览器完全一致，是验证部署链路的天然探针
+
+
 
 
 
