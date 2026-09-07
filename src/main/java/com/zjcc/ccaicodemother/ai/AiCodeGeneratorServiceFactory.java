@@ -44,6 +44,9 @@ public class AiCodeGeneratorServiceFactory {
     @Resource
     private StreamingChatModel reasoningStreamingChatModel;
 
+    @Resource
+    private ToolManager toolManager;
+
     /**
      * AI 服务实例缓存 性能优化
      * 缓存策略：
@@ -103,13 +106,7 @@ public class AiCodeGeneratorServiceFactory {
                     .streamingChatModel(reasoningStreamingChatModel)
                     // 必须指定 chatMemoryProvider 配置，为每个 memoryId 绑定会话记忆
                     .chatMemoryProvider(memoryId -> chatMemory)
-                    .tools(
-                            new FileWriteTool(),
-                            new FileReadTool(),
-                            new FileModifyTool(),
-                            new FileDirReadTool(),
-                            new FileDeleteTool()
-                    )
+                    .tools(toolManager.getAllTools())
                     // 幻觉工具名称策略 配置了找不到工具时的处理策略
                     // 让框架帮我们处理 AI 出现幻觉的情况 比如告诉 AI “找不到工具”
                     // TODO 优化幻觉处理策略

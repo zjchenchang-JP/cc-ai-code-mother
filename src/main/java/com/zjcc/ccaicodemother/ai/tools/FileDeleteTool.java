@@ -1,5 +1,6 @@
 package com.zjcc.ccaicodemother.ai.tools;
 
+import cn.hutool.json.JSONObject;
 import com.zjcc.ccaicodemother.constant.AppConstant;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -16,7 +17,7 @@ import java.nio.file.Paths;
  * 支持 AI 通过工具调用的方式删除文件
  */
 @Slf4j
-public class FileDeleteTool {
+public class FileDeleteTool extends BaseTool{
 
     @Tool("删除指定路径的文件")
     public String deleteFile(
@@ -68,5 +69,21 @@ public class FileDeleteTool {
             }
         }
         return false;
+    }
+
+    @Override
+    public String getToolName() {
+        return "deleteFile";
+    }
+
+    @Override
+    public String getDisplayName() {
+        return "删除文件";
+    }
+
+    @Override
+    public String generateToolExecutedResult(JSONObject arguments) {
+        String relativeFilePath = arguments.getStr("relativeFilePath");
+        return String.format(" [工具调用] %s %s", getDisplayName(), relativeFilePath);
     }
 }
