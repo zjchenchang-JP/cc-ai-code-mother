@@ -2,7 +2,7 @@ package com.zjcc.ccaicodemother.ai;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.zjcc.ccaicodemother.ai.tools.FileWriteTool;
+import com.zjcc.ccaicodemother.ai.tools.*;
 import com.zjcc.ccaicodemother.exception.BusinessException;
 import com.zjcc.ccaicodemother.exception.ErrorCode;
 import com.zjcc.ccaicodemother.model.enums.CodeGenTypeEnum;
@@ -103,7 +103,13 @@ public class AiCodeGeneratorServiceFactory {
                     .streamingChatModel(reasoningStreamingChatModel)
                     // 必须指定 chatMemoryProvider 配置，为每个 memoryId 绑定会话记忆
                     .chatMemoryProvider(memoryId -> chatMemory)
-                    .tools(new FileWriteTool())
+                    .tools(
+                            new FileWriteTool(),
+                            new FileReadTool(),
+                            new FileModifyTool(),
+                            new FileDirReadTool(),
+                            new FileDeleteTool()
+                    )
                     // 幻觉工具名称策略 配置了找不到工具时的处理策略
                     // 让框架帮我们处理 AI 出现幻觉的情况 比如告诉 AI “找不到工具”
                     // TODO 优化幻觉处理策略
