@@ -7,6 +7,7 @@ import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
+import com.zjcc.ccaicodemother.ai.AiCodeGenTypeRoutingService;
 import com.zjcc.ccaicodemother.constant.AppConstant;
 import com.zjcc.ccaicodemother.constant.UserConstant;
 import com.zjcc.ccaicodemother.core.AiCodeGeneratorFacade;
@@ -60,11 +61,13 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     @Resource
     private StreamHandlerExecutor streamHandlerExecutor;
     @Resource
-
     private VueProjectBuilder vueProjectBuilder;
 
     @Resource
     private ScreenshotService screenshotService;
+
+    @Resource
+    private AiCodeGenTypeRoutingService aiCodeGenTypeRoutingService;
 
     @Override
     public long addApp(AppAddRequest appAddRequest, User loginUser) {
@@ -86,10 +89,16 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         // 暂时设置为多文件生成
         //app.setCodeGenType(CodeGenTypeEnum.MULTI_FILE.getValue());
         // 暂时设置为 VUE 工程生成
-        app.setCodeGenType(CodeGenTypeEnum.VUE_PROJECT.getValue());
+        //app.setCodeGenType(CodeGenTypeEnum.VUE_PROJECT.getValue());
+
+        // 使用AI 智能选择代码生成类型
+        // 应用创建时会自动调用智能路由服务，根据用户的初始提示词选择最合适的代码生成类型
+        CodeGenTypeEnum selectedCodeGenType  = aiCodeGenTypeRoutingService.routeCodeGenType(initPrompt);
+        app.setCodeGenType(selectedCodeGenType .getValue());
         // 3. 插入数据
         boolean result = this.save(app);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "创建应用失败");
+        log.info("应用创建成功，ID: {}，类型: {}", app.getId(), selectedCodeGenType.getValue());
         return app.getId();
     }
 
@@ -295,7 +304,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         // 6. 调用 AI 生成代码（流式）
         Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId);
         // 7. 收集AI响应内容并在完成后记录到对话历史
-        return streamHandlerExecutor.doExecute(codeStream, chatHistoryService, appId, loginUser,codeGenTypeEnum);
+        return streamHandlerExecutor.doExecute(codeStream, chatHistoryService, appId, loginUser, codeGenTypeEnum);
     }
 
     @Override
@@ -308,7 +317,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(oldApp == null, ErrorCode.NOT_FOUND_ERROR, "应用不存在");
         // 3. 验证用户是否有权限部署该应用，仅本人可以部署
         ThrowUtils.throwIf(!oldApp.getUserId().equals(loginUser.getId()),
-                ErrorCode.NO_AUTH_ERROR,"无权限部署应用");
+                ErrorCode.NO_AUTH_ERROR, "无权限部署应用");
         // 4. 检查是否已有 deployKey
         String deployKey = oldApp.getDeployKey();
         // 没有则生成 6 位 deployKey（大小写字母 + 数字）
@@ -371,6 +380,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     /**
      * 异步生成应用截图并更新封面
      * 截图生成是一个相对耗时的操作，我们必须使用异步方式处理，避免阻塞用户的部署流程
+     *
      * @param appId  应用ID
      * @param appUrl 应用访问URL
      */
