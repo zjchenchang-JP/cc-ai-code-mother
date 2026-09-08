@@ -1,8 +1,8 @@
 package com.zjcc.ccaicodemother.ai.tools;
 
 import jakarta.annotation.PostConstruct;
-import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
@@ -25,8 +25,10 @@ public class ToolManager {
     /**
      * 自动注入所有工具
      * 必须使用数组 自动注入所有的工具
+     * 注意：数组/集合注入是 @Autowired 的专属能力（收集所有同类型 Bean）；
+     * @Resource 只会按名字/类型找单个 Bean，不支持收集，用在这里会报 [LBaseTool; 找不到
      */
-    @Resource
+    @Autowired
     private BaseTool[] tools;
 
     /**
