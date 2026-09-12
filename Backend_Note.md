@@ -1833,8 +1833,9 @@ WHERE (createTime < ?) OR (createTime = ? AND id < ?)
 
 **一句话总结**：游标 = 上一批数据的最后一条的 createTime，前端从已渲染的数据里取，触底时带着它再调同一接口——"下一页"的定义从"位置"变成了"比我现在看到的最旧的还早"，这正是无限滑动稳定不重不漏的全部秘密。
 
-
-
+# 2026/09/03
+## 配置文件优先级
+>application.yml < application-local.yml < 命令行参数（--server.port=xxx）< 环境变量——后面对前面同 key 一路覆盖
 
 
 
