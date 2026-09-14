@@ -837,6 +837,135 @@ start "" nginx.exe
 3. **基础设施进程（Nginx/Redis/MySQL）不会随应用自动复活**——"之前是好的"只说明"之前它活着"，重启后要逐个确认；涉及它们的依赖（部署 URL、截图）都会在重启后集中爆雷
 4. **Selenium 截图本质是"Chrome 回访 URL"**——它对 URL 可达性的要求和浏览器完全一致，是验证部署链路的天然探针
 
+# 2026/09/12
+
+## 一、JsonEOFException 大结局：Spring RestClient 截断 chunked 响应 → 切换 JDK HttpClient 传输层
+
+### 症状与案发链
+
+`AiCodeGenTypeRoutingServiceTest.routeCodeGenType`（AI 智能路由，结构化输出返回枚举）持续报错：
+
+```
+HTTP response:
+- status code: 200
+- body: {              ← ★ 整个响应体只有 1 个字符 "{"！
+Transfer-Encoding: chunked
+
+JsonEOFException: Unexpected end-of-input:
+expected close marker for Object (start marker at line 1, column 1)
+```
+
+DeepSeek 返回 200 但 body 只剩 `{`，Jackson 等不到 `}`。三次重试全部同样死法——**确定性截断**，非偶发抖动。且只有路由测试炸，其他 AI 调用（HTML 生成等）正常。
+
+### 迷雾：三个前置错误（同一条链上的连环坑）
+
+这场排查横跨数日，先后踩了四个坑，注意它们是**层层递进**的关系：
+
+```
+坑1：yml 的 strict-json-schema/response-format 被注释（降级 1.1.0 时与教程对齐）
+  → 模型自由输出 → Jackson 解析半截 JSON → JsonEOFException
+坑2：放开 response-format: json_object
+  → DeepSeek 校验"prompt 必须含 json 字样" → 400 Bad Request
+坑3：提示词补上"请直接以 json 格式输出"
+  → 400 消失，但 JsonEOFException 复现（body 依旧只有 "{"）
+坑4：（真凶）Spring RestClient 读 chunked 响应截断 ← 本次主战场
+```
+
+坑1-3 是配置层问题，修完暴露了坑4 这个网络层的真凶。
+
+### 二分排查：五层排除一层锁定
+
+| 实验 | 结果 | 排除了谁 |
+|---|---|---|
+| curl 直连 DeepSeek（`--noproxy`） | ✅ 完整 JSON | DeepSeek 服务端 |
+| curl 走本地代理 127.0.0.1:56590 | ✅ 完整 JSON | 代理软件 |
+| 裸 JDK HttpClient（HTTP/2 默认） | ✅ 475 字节 | JDK HttpClient + HTTP/2 |
+| 裸 JDK HttpClient（强制 HTTP/1.1） | ✅ 475 字节 | 协议版本 |
+| 同请求换完整中文 payload（裸 HttpClient） | ✅ 475 字节 | 请求体内容/编码 |
+| 命令行 mvn 跑（绕开 IDEA） | ❌ 同样截断 | IDEA 代理注入 |
+| **最小复现：Spring RestClient.post() 同请求** | ❌ **body length=1** | ★★ 锤死 RestClient |
+
+**最小复现代码**（10 行，教科书级的二分定位手段）：
+
+```java
+RestClient client = RestClient.create();
+String resp = client.post()
+        .uri("https://api.deepseek.com/chat/completions")
+        .header("Authorization", "Bearer sk-xxx")
+        .header("Content-Type", "application/json")
+        .body(body)          // 与 Java 测试完全相同的请求体（从日志抄）
+        .retrieve()
+        .body(String.class);
+// 同一台机器同一秒：裸 HttpClient 475B vs RestClient 1B
+```
+
+**结论**：RestClient 默认的 `JdkClientHttpRequestFactory` 处理 DeepSeek 的 chunked（无 Content-Length）响应时流被提前终止。langchain4j 1.1.0 的 `SpringRestClient` 传输层恰好用它。其他 AI 调用不炸是因为流式（SSE）走逐帧读取路径，同步小响应 + chunked 才踩中。
+
+### 修复三连（每个都换过一种错误）
+
+**修复①：pom 引入 JDK HttpClient 传输层**
+
+```xml
+<dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-http-client-jdk</artifactId>
+    <version>1.1.0</version>
+</dependency>
+```
+
+→ 新错误：`Conflict: multiple HTTP clients have been found in the classpath: [SpringRestClientBuilderFactory, JdkHttpClientBuilderFactory]. Please explicitly specify the one you wish to use.`（langchain4j 的 HTTP 层是 SPI 可插拔，classpath 多实现必须显式指定）
+
+**修复②尝试失败：exclusion 排除 restclient 依赖**
+
+```xml
+<exclusion>...</exclusion>  <!-- 从 starter 排除 http-client-spring-restclient -->
+```
+
+→ 新错误：`NoClassDefFoundError: SpringRestClient`——**starter 的 AutoConfig 编译期硬编码引用了 SpringRestClient 类**，jar 不能删。exclusion 死路。
+
+**修复②正确解：同名 Bean 覆盖**（javap 反汇编 AutoConfig 确认其 `@ConditionalOnMissingBean(name = "openAiChatModelHttpClientBuilder")` 的让位机制）：
+
+```java
+@Configuration
+public class LangChain4jHttpClientConfig {
+
+    @Bean
+    public HttpClientBuilder openAiChatModelHttpClientBuilder() {      // ★ 与 AutoConfig 同名
+        return new JdkHttpClientBuilder();
+    }
+
+    @Bean
+    public HttpClientBuilder openAiStreamingChatModelHttpClientBuilder() {
+        return new JdkHttpClientBuilder();
+    }
+}
+```
+
+→ starter 的两个模型 Bean 恢复，但**手写的 ReasoningStreamingChatModelConfig 仍报 Conflict**——它不经过 Spring 覆盖机制。
+
+**修复③：手写 builder 显式指定**（"explicitly specify" 的本意——builder 传参）：
+
+```java
+return OpenAiStreamingChatModel.builder()
+        .apiKey(apiKey).baseUrl(baseUrl).modelName(modelName)
+        ...
+        .httpClientBuilder(new JdkHttpClientBuilder())   // ★ 显式指定 JDK 实现
+        .build();
+```
+
+→ **BUILD SUCCESS，Tests run: 1, Failures: 0, Errors: 0** ✅
+
+### 经验沉淀
+
+1. **"确定性错误"与"偶发性错误"的排查策略不同**：三次重试同样死法 = 确定性 bug，别怀疑网络抖动，一定在代码/配置层
+2. **最小复现是二分法的尖刀**：把怀疑链压缩到 10 行代码内，同一台机器同一秒跑出 475B vs 1B 的对照，任何狡辩空间归零
+3. **langchain4j HTTP 传输层是 SPI 可插拔的**（jdk / spring-restclient / jetty 等实现）——classpath 多实现会报 Conflict；两种指定方式：starter 管的用**同名 Bean 覆盖**（借 @ConditionalOnMissingBean 让位），手写 builder 的用 **`.httpClientBuilder(...)` 显式传参**
+4. **exclusion 不是万能的**：依赖的类被自动配置类编译期硬编码引用时，删 jar = NoClassDefFoundError；先 javap 反汇编 AutoConfig 看它的引用关系和条件注解再动手
+5. **读别人的报错提示要读全**："Please explicitly specify the one you wish to use" 不是指系统属性（查遍 loader 无 getProperty），而是指 builder 传参或 Bean 提供
+6. **为什么只有路由测试炸**：同步小响应 + chunked 触发 RestClient 缓冲缺陷；流式 SSE 走逐帧读取不经过该路径——"同一套配置有的接口好有的坏"往往指向读取路径差异，不是配置玄学
+7. **连环坑的识别**：同一个表象（JsonEOF）可能是配置层（json_object 没开/提示词缺 json 字样）或网络层（传输层截断）任一层造成——每修一层就重跑验证，不要一次改多处
+
+
 
 
 
