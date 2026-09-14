@@ -1,5 +1,6 @@
 package com.zjcc.ccaicodemother.config;
 
+import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import lombok.Data;
@@ -37,6 +38,9 @@ public class ReasoningStreamingChatModelConfig {
                 .maxTokens(maxTokens)
                 .logRequests(true)
                 .logResponses(true)
+                // 显式指定 JDK HttpClient 传输层：classpath 同时存在 spring-restclient 与 jdk
+                // 两个实现时 SPI 自动发现会报 Conflict；且 RestClient 读 chunked 响应会截断
+                .httpClientBuilder(new JdkHttpClientBuilder())
                 .build();
     }
 }

@@ -53,6 +53,13 @@
             <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
             <version>1.1.0-beta7</version>
         </dependency>
+        <!-- HTTP 传输层：显式使用 JDK HttpClient 实现，修复 Spring RestClient
+             处理 chunked 响应时 body 被截断（只剩"{"）导致 JsonEOFException 的问题 -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-http-client-jdk</artifactId>
+            <version>1.1.0</version>
+        </dependency>
         <!-- Reactor 响应式编程 把 AI 返回的内容封装为更通用的 Flux 响应式流对象-->
         <dependency>
             <groupId>dev.langchain4j</groupId>
