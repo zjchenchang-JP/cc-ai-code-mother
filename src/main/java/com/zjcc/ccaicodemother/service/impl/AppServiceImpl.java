@@ -8,6 +8,7 @@ import cn.hutool.core.util.StrUtil;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.zjcc.ccaicodemother.ai.AiCodeGenTypeRoutingService;
+import com.zjcc.ccaicodemother.ai.AiCodeGenTypeRoutingServiceFactory;
 import com.zjcc.ccaicodemother.constant.AppConstant;
 import com.zjcc.ccaicodemother.constant.UserConstant;
 import com.zjcc.ccaicodemother.core.AiCodeGeneratorFacade;
@@ -67,7 +68,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private ScreenshotService screenshotService;
 
     @Resource
-    private AiCodeGenTypeRoutingService aiCodeGenTypeRoutingService;
+    private AiCodeGenTypeRoutingServiceFactory aiCodeGenTypeRoutingServiceFactory;
 
     @Override
     public long addApp(AppAddRequest appAddRequest, User loginUser) {
@@ -91,9 +92,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         // 暂时设置为 VUE 工程生成
         //app.setCodeGenType(CodeGenTypeEnum.VUE_PROJECT.getValue());
 
-        // 使用AI 智能选择代码生成类型
+        // 使用AI 智能选择代码生成类型(多例模式)
         // 应用创建时会自动调用智能路由服务，根据用户的初始提示词选择最合适的代码生成类型
-        CodeGenTypeEnum selectedCodeGenType  = aiCodeGenTypeRoutingService.routeCodeGenType(initPrompt);
+        AiCodeGenTypeRoutingService aiCodeGenTypeRoutingService  = aiCodeGenTypeRoutingServiceFactory.createAiCodeGenTypeRoutingService();
+        CodeGenTypeEnum selectedCodeGenType  = aiCodeGenTypeRoutingService .routeCodeGenType(initPrompt);
         app.setCodeGenType(selectedCodeGenType .getValue());
         // 3. 插入数据
         boolean result = this.save(app);

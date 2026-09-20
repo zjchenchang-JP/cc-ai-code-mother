@@ -7,6 +7,7 @@ import com.zjcc.ccaicodemother.exception.BusinessException;
 import com.zjcc.ccaicodemother.exception.ErrorCode;
 import com.zjcc.ccaicodemother.model.enums.CodeGenTypeEnum;
 import com.zjcc.ccaicodemother.service.ChatHistoryService;
+import com.zjcc.ccaicodemother.utils.SpringContextUtil;
 import dev.langchain4j.community.store.memory.chat.redis.RedisChatMemoryStore;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
@@ -28,12 +29,12 @@ import java.time.Duration;
 @Slf4j
 public class AiCodeGeneratorServiceFactory {
 
-    @Resource
+    @Resource(name = "openAiChatModel")
     private ChatModel chatModel;
 
     // 流式模型（starter 自动配置的）
-    @Resource(name = "openAiStreamingChatModel")
-    private StreamingChatModel streamingChatModel;
+    //@Resource(name = "openAiStreamingChatModel")
+    //private StreamingChatModel streamingChatModel;
 
     @Resource // 会话记忆
     private RedisChatMemoryStore redisChatMemoryStore;
@@ -41,8 +42,8 @@ public class AiCodeGeneratorServiceFactory {
     @Resource
     private ChatHistoryService chatHistoryService;
 
-    @Resource
-    private StreamingChatModel reasoningStreamingChatModel;
+    //@Resource
+    //private StreamingChatModel reasoningStreamingChatModel;
 
     @Resource
     private ToolManager toolManager;
@@ -102,27 +103,36 @@ public class AiCodeGeneratorServiceFactory {
         // 根据代码生成类型选择不同的模型配置
         return switch (codeGenType) {
             // Vue 项目生成使用推理模型
-            case VUE_PROJECT -> AiServices.builder(AiCodeGeneratorService.class)
-                    .streamingChatModel(reasoningStreamingChatModel)
-                    // 必须指定 chatMemoryProvider 配置，为每个 memoryId 绑定会话记忆
-                    .chatMemoryProvider(memoryId -> chatMemory)
-                    .tools(toolManager.getAllTools())
-                    // 幻觉工具名称策略 配置了找不到工具时的处理策略
-                    // 让框架帮我们处理 AI 出现幻觉的情况 比如告诉 AI “找不到工具”
-                    // TODO 优化幻觉处理策略
-                    // 调大对话记忆的容量，否则 AI 会中途断片儿，忘记已经生成了哪些文件
-                    // 尝试换其他的 AI 大模型
-                    // 优化提示词
-                    .hallucinatedToolNameStrategy(toolExecutionRequest -> ToolExecutionResultMessage.from(
-                            toolExecutionRequest, "Error: there is no tool called " + toolExecutionRequest.name()
-                    ))
-                    .build();
+            case VUE_PROJECT -> {
+                // 使用多例模式的 StreamingChatModel 解决单例并发阻塞问题
+                StreamingChatModel reasoningStreamingChatModel = SpringContextUtil.getBean("reasoningStreamingChatModelPrototype",
+                        StreamingChatModel.class);
+                yield AiServices.builder(AiCodeGeneratorService.class)
+                        .streamingChatModel(reasoningStreamingChatModel)
+                        // 必须指定 chatMemoryProvider 配置，为每个 memoryId 绑定会话记忆
+                        .chatMemoryProvider(memoryId -> chatMemory)
+                        .tools(toolManager.getAllTools())
+                        // 幻觉工具名称策略 配置了找不到工具时的处理策略
+                        // 让框架帮我们处理 AI 出现幻觉的情况 比如告诉 AI “找不到工具”
+                        // TODO 优化幻觉处理策略
+                        // 调大对话记忆的容量，否则 AI 会中途断片儿，忘记已经生成了哪些文件
+                        // 尝试换其他的 AI 大模型
+                        // 优化提示词
+                        .hallucinatedToolNameStrategy(toolExecutionRequest -> ToolExecutionResultMessage.from(
+                                toolExecutionRequest, "Error: there is no tool called " + toolExecutionRequest.name()
+                        ))
+                        .build();
+            }
             // HTML 和多文件生成使用默认模型
-            case HTML, MULTI_FILE -> AiServices.builder(AiCodeGeneratorService.class)
-                    .chatModel(chatModel)
-                    .streamingChatModel(streamingChatModel)
-                    .chatMemory(chatMemory)
-                    .build();
+            case HTML, MULTI_FILE -> {
+                // 使用多例模式的 StreamingChatModel 解决并发问题
+                StreamingChatModel openAiStreamingChatModel = SpringContextUtil.getBean("streamingChatModelPrototype", StreamingChatModel.class);
+                yield AiServices.builder(AiCodeGeneratorService.class)
+                        .chatModel(chatModel)
+                        .streamingChatModel(openAiStreamingChatModel)
+                        .chatMemory(chatMemory)
+                        .build();
+            }
             default -> throw new BusinessException(ErrorCode.SYSTEM_ERROR,
                     "不支持的代码生成类型: " + codeGenType.getValue());
         };

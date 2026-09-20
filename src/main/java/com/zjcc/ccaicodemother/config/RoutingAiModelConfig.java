@@ -1,8 +1,8 @@
 package com.zjcc.ccaicodemother.config;
 
 import dev.langchain4j.http.client.jdk.JdkHttpClientBuilder;
-import dev.langchain4j.model.chat.StreamingChatModel;
-import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -10,12 +10,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Scope;
 
 /**
- * 推理流式模型配置类
+ * 智能路由专用模型配置
  */
 @Configuration
-@ConfigurationProperties(prefix = "langchain4j.open-ai.reasoning-streaming-chat-model")
+@ConfigurationProperties(prefix = "langchain4j.open-ai.routing-chat-model")
 @Data
-public class ReasoningStreamingChatModelConfig {
+public class RoutingAiModelConfig {
 
     private String baseUrl;
 
@@ -32,21 +32,15 @@ public class ReasoningStreamingChatModelConfig {
     private Boolean logResponses = false;
 
     /**
-     * 推理流式模型（用于 Vue 项目生成，带工具调用）
+     * 创建用于路由判断的ChatModel
      */
     @Bean
-    @Scope("prototype") //性能优化 多例模式
-    public StreamingChatModel reasoningStreamingChatModelPrototype() {
-        // 为了测试方便临时修改
-        //final String modelName = "deepseek-chat";
-        //final int maxTokens = 8192;
-        // 生产环境使用：
-        // final String modelName = "deepseek-reasoner";
-        // final int maxTokens = 32768;
-        return OpenAiStreamingChatModel.builder()
+    @Scope("prototype")
+    public ChatModel routingChatModelPrototype() {
+        return OpenAiChatModel.builder()
                 .apiKey(apiKey)
-                .baseUrl(baseUrl)
                 .modelName(modelName)
+                .baseUrl(baseUrl)
                 .maxTokens(maxTokens)
                 .temperature(temperature)
                 .logRequests(logRequests)
