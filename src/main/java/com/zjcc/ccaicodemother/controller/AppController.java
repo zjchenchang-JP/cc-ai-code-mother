@@ -16,6 +16,8 @@ import com.zjcc.ccaicodemother.model.dto.app.*;
 import com.zjcc.ccaicodemother.model.entity.App;
 import com.zjcc.ccaicodemother.model.entity.User;
 import com.zjcc.ccaicodemother.model.vo.AppVO;
+import com.zjcc.ccaicodemother.ratelimiter.annotation.RateLimit;
+import com.zjcc.ccaicodemother.ratelimiter.enums.RateLimitType;
 import com.zjcc.ccaicodemother.service.AppService;
 import com.zjcc.ccaicodemother.service.ProjectDownloadService;
 import com.zjcc.ccaicodemother.service.UserService;
@@ -281,6 +283,8 @@ public class AppController {
      * @return 生成结果流
      */
     @GetMapping(value = "/chat/gen/code", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    // 自定义限流 注解  60 秒内最多只能发起 3 次 AI 对话请求
+    @RateLimit(limitType = RateLimitType.USER, rate = 3, rateInterval = 60, message = "AI 对话请求过于频繁，请稍后再试")
     public Flux<ServerSentEvent<String>> chatToGenCode(@RequestParam Long appId,
                                       @RequestParam String message,
                                       HttpServletRequest request) {
