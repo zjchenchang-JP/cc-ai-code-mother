@@ -123,6 +123,7 @@ public class AiCodeGeneratorServiceFactory {
                         .hallucinatedToolNameStrategy(toolExecutionRequest -> ToolExecutionResultMessage.from(
                                 toolExecutionRequest, "Error: there is no tool called " + toolExecutionRequest.name()
                         ))
+                        .maxSequentialToolsInvocations(20)  // 最多连续调用 20 次工具 ; LangChain4j 框架会强制停止工具调用循环，防止 AI 陷入无限循环状态
                         .inputGuardrails(new PromptSafetyInputGuardrail()) // 添加输入护轨
                         // 用了输出护轨，可能会导致流式输出的响应不及时，等到 AI 输出结束才一起返回
                         //.outputGuardrails(new RetryOutputGuardrail()) // 添加输出护轨，为了流式输出效果，这里不使用
