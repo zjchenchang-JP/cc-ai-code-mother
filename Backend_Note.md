@@ -1837,6 +1837,419 @@ WHERE (createTime < ?) OR (createTime = ? AND id < ?)
 ## 配置文件优先级
 >application.yml < application-local.yml < 命令行参数（--server.port=xxx）< 环境变量——后面对前面同 key 一路覆盖
 
+# 2026/09/20
+
+## 一、SpringContextUtil 的必要性和作用：单例对象如何"每次用时拿新的 prototype Bean"
+
+**核心矛盾：单例对象需要"每次用时才向容器要一个新的 prototype Bean"，而字段注入做不到这一点。**
+
+### 机制：ApplicationContextAware + static 持有容器
+
+```java
+@Component
+public class SpringContextUtil implements ApplicationContextAware {
+
+    private static ApplicationContext applicationContext;
+
+    @Override
+    public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
+        // Spring 启动创建它时回调，把整个容器的引用塞进 static 字段
+        SpringContextUtil.applicationContext = applicationContext;
+    }
+
+    public static <T> T getBean(String name, Class<T> clazz) {
+        // 任意时刻按名字 + 类型向容器取 Bean
+        return applicationContext.getBean(name, clazz);
+    }
+}
+```
+
+- Spring 启动创建它时回调 `setApplicationContext()`，把**整个容器的引用**存进 static 字段；
+- 此后任何代码——哪怕不是 Spring 管理的对象、静态方法、`new` 出来的对象——都能在**任意时刻**调 `getBean(...)` 向容器取 Bean。
+
+### 为什么这个项目需要它
+
+`AiCodeGeneratorServiceFactory` 是单例（`@Configuration` 天然单例），它要在**每次缓存未命中、创建新 AiService 时**给这个 AiService 配一个**全新的** StreamingChatModel 实例（`createAiCodeGeneratorService` 里的 `SpringContextUtil.getBean(...)`），避免所有对话共享同一个模型实例导致流式请求串行（并发度=1）。字段注入只在启动时发生一次，拿不到"新的"，所以必须在**调用时刻**去问容器要——getBean 就是那条路，SpringContextUtil 是它的静态封装。
+
+### 诚实补充：它不是唯一方案
+
+| 方案 | 写法 | 特点 |
+|---|---|---|
+| SpringContextUtil | 静态 `getBean(name, type)` | **非 Spring 管理的代码**也能用（工具类、静态上下文、AiServices 生成的对象内部），通用逃生舱 |
+| ObjectProvider | 注入 `ObjectProvider<T>` + 每次 `getObject()` | 可注入、利于测试，但只能给 Spring 管理的 Bean 用 |
+| 注入 ApplicationContext | 工厂里直接注入容器再 `getBean` | 同上 |
+| `@Lookup` 方法注入 | Spring 运行时覆写抽象方法 | 较冷门 |
+
+对本工厂来说 ObjectProvider / 直接注入 ApplicationContext 同样能实现且更利于测试；SpringContextUtil 的**不可替代价值**在于非 Spring 管理的代码也能拿到容器。
+
+---
+
+## 二、chatModel 为什么必须 `name = "openAiChatModel"`
+
+**名字从哪来**：`langchain4j-open-ai-spring-boot-starter` 根据 `langchain4j.open-ai.chat-model.*` 配置自动注册名为 **`openAiChatModel`** 的 ChatModel Bean（流式的叫 `openAiStreamingChatModel`）——`LangChain4jHttpClientConfig` 里"覆盖 openAiChatModel 的 HTTP 传输层"的注释即印证。
+
+**为什么必须显式指定**：容器里有**两个** ChatModel 类型的 Bean——starter 的 `openAiChatModel` + 自定义的 `routingChatModelPrototype`（RoutingAiModelConfig），且都没有 `@Primary`。按类型注入就有歧义。`@Resource` 是**名字优先**的注入，指定 name 后按名字精确命中，完全不受同类型候选数量的影响。
+
+| 写法 | 结果 |
+|---|---|
+| `@Resource private ChatModel chatModel;` | 字段名 `"chatModel"` 无同名 Bean → 回退按类型 → 两个候选 → `NoUniqueBeanDefinitionException` |
+| `@Resource(name = "openAiChatModel")` | 按名字精确命中 starter 的 Bean ✅ |
+
+---
+
+## 三、不用 SpringContextUtil，prototype 为什么"退化"成单例
+
+**一句话：prototype 的语义是"每次向容器索取，就新建一个实例"，而不是"每次使用这个字段，就自动换新的"。**
+
+之前注释掉的写法：
+
+```java
+//@Resource
+//private StreamingChatModel reasoningStreamingChatModel;
+```
+
+退化链条：
+
+1. 工厂是单例，Spring **只在它启动初始化时注入一次**字段；
+2. 注入那一刻，容器按 prototype 定义 new 了一个实例交给字段，然后**再也不管这个注入点**；
+3. 字段从此永远持有那一个引用——Bean 定义虽是 prototype，实际效果退化为单例。经典的"**prototype 注入 singleton，prototype 失效**"；
+4. 后果：所有 appId 的 AiService 共享同一个 StreamingChatModel 实例，并发流式请求全挤在这一个实例上。
+
+| | 字段注入 | SpringContextUtil.getBean |
+|---|---|---|
+| 发生时机 | 启动时，仅一次 | 每次调用时，实时 |
+| prototype 行为 | 只在注入那刻 new 一次，之后冻结 | 每次调用都 new |
+| 实际效果 | 退化成单例 | 真·多例 |
+
+> 顺带：langchain4j 模型实例本身通常是无状态、线程安全的，"共享单例导致并发度=1"也可能部分来自此前 RestClient chunked 截断那类传输层问题；不过多实例无害，这个设计保留没问题。
+
+---
+
+## 四、@Resource 默认的 Bean 注入解析流程
+
+由 `CommonAnnotationBeanPostProcessor` 处理，顺序固定：
+
+1. **显式指定了 name** → 只按名字找，找不到直接抛异常，**不回退**按类型（name 是精确锚定，不受候选数量影响）；
+2. **没指定 name** → 先拿**字段名**当 Bean 名找（字段叫 `chatModel` 就找名为 `"chatModel"` 的 Bean）；
+3. **字段名没命中** → 回退**按类型**匹配（行为同 `@Autowired`）：唯一候选 → 注入；多个候选 → 靠 `@Primary` / `@Qualifier` 收敛，否则 `NoUniqueBeanDefinitionException`；零候选 → `NoSuchBeanDefinitionException`；
+4. **时机**：发生在 Bean 初始化的属性填充阶段——单例一辈子只有这一次。
+
+对比 getBean 的流程：**调用时**实时查容器 → 命中 prototype 定义 → 现场新建返回。"启动时一次性" vs "调用时每次"——这一组对比就是第一、三问的全部答案。
+
+---
+
+## 五、实战踩坑：Bean 名不匹配 + 按类型注入歧义（两个真 Bug，已修复）
+
+**Bug 1：getBean 的字符串与 @Bean 方法名不一致（VUE_PROJECT 路径运行时必炸）**
+
+工厂里 `getBean("reasoningStreamingChatModelPrototype")`，但 `@Bean` 方法名叫 `reasoningStreamingChatModel`——**未指定 name 属性时，Bean 名 = @Bean 方法名**，容器里根本没有叫 `reasoningStreamingChatModelPrototype` 的 Bean → 第一次走 Vue 生成路径就抛 `NoSuchBeanDefinitionException`。
+
+**Bug 2：裸 @Resource 注入 ChatModel（启动可能就炸）**
+
+`AiCodeGenTypeRoutingServiceFactory` 里 `@Resource private ChatModel chatModel;` 不带 name——字段名无同名 Bean，回退按类型又有两个候选（`openAiChatModel` + `routingChatModelPrototype`，均无 `@Primary`）→ `NoUniqueBeanDefinitionException`。且按设计意图（`RoutingAiModelConfig` 注释"智能路由专用"），它本该用 `routingChatModelPrototype`——这个 Bean 当时**没有任何消费者**。
+
+**修复**（两处一行级）：
+
+| 文件 | 改动 |
+|---|---|
+| ReasoningStreamingChatModelConfig | `@Bean` 方法重命名 `reasoningStreamingChatModel` → `reasoningStreamingChatModelPrototype`，与 `streamingChatModelPrototype` 命名风格统一（prototype Bean 名后缀统一为 `Prototype`） |
+| AiCodeGenTypeRoutingServiceFactory | `@Resource` → `@Resource(name = "routingChatModelPrototype")` |
+
+**教训**：
+
+1. Bean 名默认 = @Bean 方法名；`getBean("字符串")` 写错**编译期不报错、运行时才炸**——prototype + getBean 的字符串依赖要靠命名约定对齐（这也是"后缀统一 Prototype"的价值：见名知 scope）；
+2. 同类型 Bean 一多（自定义模型配置类越加越多），所有按类型注入的老代码瞬间变歧义——要么 name 锚定，要么 `@Primary` 指定默认。
+
+---
+
+## 六、并发踩坑：@Bean 方法被 CGLIB 拦截，"每次新建实例"静默失效（ConcurrentModificationException）
+
+**现象**：并发测试里 3 个虚拟线程**各自**调用 `createAiCodeGenTypeRoutingService()` 拿实例再调 `routeCodeGenType`，却抛：
+
+```
+java.util.ConcurrentModificationException
+    at java.base/java.util.HashMap.computeIfAbsent(HashMap.java:1229)
+    at dev.langchain4j.service.guardrail.AbstractGuardrailService.hasInputGuardrails(...)
+    at dev.langchain4j.service.DefaultAiServices.invokeInputGuardrails(...)
+    at jdk.proxy2.$Proxy113.routeCodeGenType(...)
+```
+
+每个线程明明"自己建了一个服务"，为什么会共享同一个 HashMap？——**因为它们拿到的根本是同一个对象**。
+
+### 第 1 层原因（自己的代码）：@Configuration 里的 @Bean 方法调用会被 CGLIB 拦截
+
+```java
+@Configuration
+public class AiCodeGenTypeRoutingServiceFactory {
+
+    @Bean   // ← 问题所在
+    public AiCodeGenTypeRoutingService createAiCodeGenTypeRoutingService() {
+        ChatModel chatModel = SpringContextUtil.getBean("routingChatModelPrototype", ChatModel.class);
+        return AiServices.builder(AiCodeGenTypeRoutingService.class).chatModel(chatModel).build();
+    }
+}
+```
+
+Spring 对 `@Configuration` 类做 **CGLIB 增强**（`proxyBeanMethods = true` 默认开启）：对 **@Bean 方法的一切调用**——外部注入后调、类内部调、测试里调——都被拦截，**直接返回容器里缓存的单例**，方法体不会重复执行。
+
+```
+线程1 ─┐
+线程2 ─┼─ 调 createAiCodeGenTypeRoutingService() ── CGLIB 拦截 ──> 返回同一个单例
+线程3 ─┘                                                （方法体只在启动时跑过一次）
+```
+
+后果：注释里"动态获取多例的 ChatModel 支持并发"**从未发生过**——`getBean("routingChatModelPrototype")` 只在启动时执行过一次，3 个线程共享同一个代理对象。这与上午"prototype 注入单例失效"是同一族问题：**你以为在调方法，其实在问容器要 Bean**。
+
+| 写法 | 调用时的实际行为 |
+|---|---|
+| `@Configuration` 类里的 `@Bean` 方法 | CGLIB 拦截 → 返回容器单例，**方法体不重复执行** |
+| 同一个类里的**普通方法** | 真正执行方法体，每次调用每次新建 |
+
+### 第 2 层原因（langchain4j 1.1.0 的 bug）：共享 AiService 的 guardrail 缓存是裸 HashMap
+
+langchain4j 1.1.0 的 `AbstractGuardrailService`：
+
+```java
+private final Map<MethodKey, Boolean> inputGuardrailMethods = new HashMap<>();  // 裸 HashMap！
+
+public boolean hasInputGuardrails(MethodKey method) {
+    // 每次 AI 方法调用都会走到这里，懒加载缓存"该方法有没有 guardrail"
+    return this.inputGuardrailMethods.computeIfAbsent(method, m -> !getInputGuardrails(m).isEmpty());
+}
+```
+
+`HashMap` 非线程安全：多个线程在同一张 map 上并发 `computeIfAbsent` → 结构修改互相踩 → `ConcurrentModificationException`。**官方在 1.2.0 已改为 `ConcurrentHashMap` 修复**（1.1.0 与 1.2.0 源码对比确认）。
+
+两层叠加：CGLIB 拦截让线程们共享代理 → 共享那张 HashMap → 并发首调竞争 → 炸。
+
+### 修复
+
+`createAiCodeGenTypeRoutingService()` 去掉 `@Bean`（变普通方法，每次调用真正执行方法体 → 每次独立实例：独享 guardrail 缓存 + 独享 prototype ChatModel）；另保留一个 `@Bean` 方法委托它，兼容按类型注入的旧逻辑：
+
+```java
+// 普通方法：每次调用新建实例（绝不能加 @Bean！）
+public AiCodeGenTypeRoutingService createAiCodeGenTypeRoutingService() { ... }
+
+// 兼容 Bean：启动时创建一个单例，供 @Resource 按类型注入
+@Bean
+public AiCodeGenTypeRoutingService aiCodeGenTypeRoutingService() {
+    return createAiCodeGenTypeRoutingService();  // 内部调普通方法 → 真正执行
+}
+```
+
+修复后并发测试通过（3 线程 3 实例，3 次 AI 调用全部成功）。
+
+### 教训
+
+1. **"每次调用都新建"的工厂方法绝不能标 `@Bean`**——@Bean 的语义是"容器启动时创建一次的 Bean 的配方"，与方法语义（每次调用执行一次）直接冲突；
+2. langchain4j 1.1.0 的 AiService **共享实例并非完全线程安全**（guardrail 缓存是裸 HashMap），根治靠升级 1.2.0+；
+3. **遗留风险**：Caffeine 缓存的 `AiCodeGeneratorService`（每 appId 一个、跨请求共享）同样有此隐患——同一 app 冷缓存时两请求并发首聊会踩同一个窗口。窗口极窄（仅每方法首次调用），升级版本可全局根治。
+
+### 一句话总结
+
+> `@Configuration` 里的 `@Bean` 方法被调用时不执行方法体、只返回容器单例——想要"每次新建"就写普通方法；叠加 langchain4j 1.1.0 裸 HashMap 的 guardrail 缓存，共享实例并发首调就是 `ConcurrentModificationException`。
+
+# 2026/09/21
+```java
+private String getClientIP() {
+     ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+     if (attributes == null) {
+         return "unknown";
+     }
+     HttpServletRequest request = attributes.getRequest();
+     String ip = request.getHeader("X-Forwarded-For");
+     if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
+         ip = request.getHeader("X-Real-IP");
+     }
+     if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
+         ip = request.getRemoteAddr();
+     }
+     // 处理多级代理的情况
+     if (ip != null && ip.contains(",")) {
+         ip = ip.split(",")[0].trim();
+     }
+     return ip != null ? ip : "unknown";
+ }
+```
+## 一、getClientIP 方法逻辑：ThreadLocal 捞请求 + 三级降级取真实客户端 IP
+
+**背景**：限流切面（`RateLimitAspect`）不在 Controller 里，方法签名上没有 `HttpServletRequest` 参数——AOP 环境下怎么拿请求、怎么定位"这个请求是谁发的"？
+
+### 第 1 步：从 ThreadLocal 捞当前请求
+
+```java
+ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+if (attributes == null) {
+    return "unknown";
+}
+HttpServletRequest request = attributes.getRequest();
+```
+
+Spring MVC 处理请求时会把当前请求对象绑定到**当前线程的 ThreadLocal**（`RequestContextHolder`）。任何在这条请求线程上执行的代码（切面、工具类、Service）都能这样捞回来。`null` 检查兜底"当前线程不在处理 HTTP 请求"的场景（如定时任务线程直接调用了带切面的方法），返回 `"unknown"`。
+
+### 第 2 步：三级降级取 IP（核心）
+
+| 优先级 | 来源 | 是什么 | 什么时候有值 |
+|---|---|---|---|
+| ① | `X-Forwarded-For` 请求头 | **事实标准**代理透传头，每经过一层代理就把对端 IP **追加**进去 | 经过了代理/负载均衡/CDN |
+| ② | `X-Real-IP` 请求头 | nginx 惯例（`proxy_set_header X-Real-IP $remote_addr;`），由最靠近应用的代理写入，单一 IP | 前面恰好是配了这个头的 nginx |
+| ③ | `request.getRemoteAddr()` | **TCP 层对端地址**——和服务器建立 socket 的那台机器 | 永远有值，最"真实" |
+
+```java
+String ip = request.getHeader("X-Forwarded-For");      // ①
+if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
+    ip = request.getHeader("X-Real-IP");               // ②
+}
+if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
+    ip = request.getRemoteAddr();                      // ③
+}
+```
+
+**为什么要降级**——直连时（本机开发 8123）：①② 都没有 → `getRemoteAddr()` = 127.0.0.1 ✅；经过 nginx 反代时：XFF = 真实客户端 IP ✅，而 `getRemoteAddr()` = 127.0.0.1（nginx 自己）❌——不用 XFF 就只能限到代理 IP，所有用户共享一个限额，限流失真。
+
+每级判断里的 `"unknown".equalsIgnoreCase(ip)` 不是多余：一些老代理在拿不到真实 IP 时会往头里**字面写入 `unknown` 字符串**，必须当无效处理。
+
+### 第 3 步：多级代理取最左
+
+XFF 是追加式的：`X-Forwarded-For: 203.0.113.7, 10.0.0.5, 10.0.0.8`（最左边是初始发起者）。所以：
+
+```java
+if (ip != null && ip.contains(",")) {
+    ip = ip.split(",")[0].trim();   // 取第一个 + 去空格
+}
+```
+
+### 在限流里的角色
+
+`generateRateLimitKey` 两处用到：`IP` 级限流的主维度、`USER` 级的降级（未登录/拿不到上下文时退化为按 IP）。返回值直接拼进 Redis key：`rate_limit:xxx:ip:203.0.113.7`——IP 判定对了，"按人配额"才公平。
+
+### ⚠️ 安全软肋：XFF 可伪造
+
+`X-Forwarded-For` 只是个普通请求头，客户端想写什么写什么。攻击者每次换个假头，nginx 的 `$proxy_add_x_forwarded_for` 是**追加**不覆盖 → 伪造值仍在最左 → 每个假 IP 一个新限流桶，**IP 限流被绕过**。生产标准做法：nginx `real_ip` 模块（`set_real_ip_from <可信代理>` + `real_ip_header X-Forwarded-For` + `real_ip_recursive on`，从右往左剥掉可信代理），或 Tomcat `RemoteIpValve` / Spring `ForwardedHeaderFilter`。本项目直连 8123 / 本地自建 nginx，写法没问题；上生产再补。
+
+**一句话总结**：`RequestContextHolder` 从 ThreadLocal 捞请求 → XFF → X-Real-IP → getRemoteAddr 三级降级 → 多级代理取最左 → 兜底 "unknown"；代价是 XFF 可伪造，生产要在可信代理层清洗。
+
+---
+
+## 二、@GetMapping 的 produces = TEXT_EVENT_STREAM_VALUE：SSE 流式响应的契约声明
+
+```java
+@GetMapping(value = "/chat/gen/code", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+public Flux<ServerSentEvent<String>> chatToGenCode(...) { ... }
+```
+
+`produces` 声明接口**生产什么 MIME 类型的响应**；`MediaType.TEXT_EVENT_STREAM_VALUE` = `"text/event-stream"`，**SSE 的官方 MIME 类型**（用常量防手拼错）。
+
+### 两个作用
+
+1. **响应契约**：响应头 `Content-Type: text/event-stream`。框架据此 + `Flux<ServerSentEvent<String>>` 返回类型，走**流式写出路径**——每个元素立即序列化成一帧写出（chunked 传输、逐帧 flush），不攒齐再发；浏览器看到它也知道"连接会一直开，逐帧解析"。
+2. **映射过滤（内容协商）**：只有 `Accept` 与 `text/event-stream` 兼容的请求才匹配到本方法（`Accept: */*` 也兼容）；带 `Accept: application/json` 来的请求 406——把契约挡在路由层。
+
+### 关键：没有它会怎样（本项目是 MVC 不是 WebFlux）
+
+项目用 `spring-boot-starter-web`（Tomcat），Spring MVC 对 Flux 返回值的处理由 produces 决定，三种命运：
+
+| 组合 | 实际行为 |
+|---|---|
+| `Flux<ServerSentEvent<T>>` + `text/event-stream` | 每个元素立即一帧 SSE、逐帧 flush ✅ 当前写法 |
+| `Flux<T>` + `application/x-ndjson` | 换行分隔 JSON 流式输出 |
+| `Flux<T>` 不写 produces（默认 application/json） | **整个流收集成 List，最后一次性序列化成 JSON 数组返回** ❌ |
+
+第三行就是丢掉 produces 的后果：打字机效果消失，用户等 AI 全部生成完才收到一坨完整 JSON——流式改造白做。
+
+细节：元素类型 `ServerSentEvent` 本身也会让 MVC 识别成 SSE（双保险之一），但 produces 把 Content-Type、Accept 过滤、接口意图**显式声明**出来，是标准的完整写法。
+
+### 帧长什么样（串联本项目整条 SSE 链）
+
+```
+data:{"d":"<!DOCTYPE "}
+data:{"d":"html>"}
+...（几百帧，每帧一个 AI chunk）
+event:done
+data:
+```
+
+`produces` 是之前 SSE 笔记（2026/08/30：JSON 包装防空格丢失、done 结束事件防 EventSource 自动重连、knife4j 非流式客户端、RestClient chunked 截断换 JDK HttpClient）整条链路的**起点声明**。
+
+**一句话总结**：`produces = TEXT_EVENT_STREAM_VALUE` 向框架和客户端双方面声明"本接口生产 SSE 流"——框架逐帧写不缓冲（MVC 默认会把 Flux 收集成一次性 JSON），路由层用 Accept 过滤不兼容请求；它是 `Flux<ServerSentEvent>` 流式成立的前提契约。
+
+---
+
+## 三、启动失败排查：@Value 占位符解析失败（BeanCreationException 嵌套链）
+
+**现象**：
+
+```
+Error creating bean with name 'rateLimitAspect': Injection of resource dependencies failed
+（后面还有一长串 Caused by 没贴）
+```
+
+**真凶**：`RedissonConfig` 里的 `@Value("${spring.data.redis.password}")`——yml 的 `spring.data.redis` 块下**没有 password 这个 key**（`password: 123456` 在第 19 行，属于上面的 `spring.datasource`，即 MySQL 的密码——上下紧挨着极其容易看串行）。
+
+**完整因果链**：
+
+```
+@Value("${spring.data.redis.password}")   ← yml 里不存在这个 key
+  → Could not resolve placeholder（占位符解析失败，Bean 创建阶段就炸，还没轮到连 Redis）
+  → redissonClient Bean 创建失败
+  → rateLimitAspect 的 @Resource RedissonClient 注入失败
+  → Application run failed
+```
+
+**修复**（冒号默认值语法）：
+
+```java
+// yml 没配 password 时取空串（本地免密 Redis），避免 Could not resolve placeholder
+@Value("${spring.data.redis.password:}")
+private String redisPassword;
+```
+
+**两条排查经验**：
+
+1. **`BeanCreationException` 第一行报的是"受害者"不是"凶手"**——`rateLimitAspect` 只是注入失败的位置，真正的病因在堆栈最深处的 `Could not resolve placeholder '...'`。贴日志/读日志必须带上完整 Caused by 链，只看第一行会被引到错误的战场。
+2. **`@Value("${key}")` 是严格解析，`${key:默认值}` 才有兜底**——可选配置（密码、开关、阈值）应该一律用冒号默认值写法，把"没配"变成合法状态而不是启动炸弹；必填配置才保留严格模式（缺了就启动失败，尽早暴露）。
+
+**顺带的知识点**：`Redisson.create(config)` 是**急切连接**——Redis 没启动时应用会在这步直接启动失败（本地 Redis 在跑所以修完占位符就通了）；急切连接改懒加载见下一节。
+
+---
+
+## 四、Redisson 懒加载：@Lazy 必须成对使用（@Bean + 注入点）
+
+**目标**：Redis 暂时不可用时不要拖死应用启动——`Redisson.create()` 推迟到第一次真正使用时才执行。
+
+### 改动（两处，缺一不可）
+
+| 文件 | 改动 |
+|---|---|
+| `RedissonConfig` | `@Bean` → `@Lazy @Bean` |
+| `RateLimitAspect` | `@Lazy @Resource private RedissonClient redissonClient;` |
+
+### 核心机制：只加 @Bean 侧的 @Lazy 是没用的
+
+- **只在 `@Bean` 上加**：`rateLimitAspect` 是启动期就要创建的组件，它一注入 `RedissonClient`，容器只好立刻把"懒 Bean"逼出来创建——懒加载被注入方提前兑现，**静默失效**；
+- **注入点也加 `@Lazy` 才完整**：此时 Spring 注入的不是真对象而是**代理**（`RedissonClient` 是接口 → JDK 动态代理）。切面启动时拿代理零成本；第一次真正调 `redissonClient.getRateLimiter(...)` 时代理才去容器取真 Bean、执行 `Redisson.create()` 建连。
+
+这与前几天"@Bean 方法被 CGLIB 拦截"是同一族的**镜像问题**：
+
+> 一边是"你以为每次新建，其实容器只给一个"；这边是"你以为启动不创建，注入时机却会逼它创建"——本质都是 **Bean 生命周期语义**与**使用时机**的错位。
+
+### 验证方式
+
+启动应用对比日志：改前启动阶段立即打印 `Redisson 3.50.0` + `connections initialized for 127.0.0.1:6379`；改后整个启动过程**没有任何 Redisson 日志**、`Started CcAiCodeMotherApplication` 正常出现——证明创建被推迟到了首个限流请求。
+
+### 诚实的边界：lazy ≠ 高可用
+
+懒加载只是把**故障点从启动期挪到首个请求**。Redis 挂掉时：启动照常成功，但第一个限流请求会在建连上耗掉 `connectTimeout 5s + 3 次重试 × 1.5s` 后抛异常 → 全局异常处理器 → 500。真正的弹性要在切面里 catch 住限流器故障做兜底策略（如 **fail-open**：限流器不可用就放行并记日志）——这是业务策略决策，按需再加。
+
+### 两个补充
+
+- 全局方案 `spring.main.lazy-initialization=true` **不推荐**——所有 Bean 都懒，首个请求普遍变慢、配置错误暴露变晚，伤面太大；精确懒加载（@Lazy 成对）才是正解；
+- Spring Session / `@Cacheable` / `RedisChatMemoryStore` 走的 Lettuce 本来就是首次使用才建连——**Redisson 是本项目唯一急切连接 Redis 的点**，只处理它就够。
+
+### 一句话总结
+
+> @Lazy 要成对：`@Bean` 侧声明"启动别创建"，注入点侧换进一个代理"用的时候才创建"；只加一侧，要么被注入方提前逼出、要么注入的还是真对象——懒加载的失效和昨天的 CGLIB 拦截一样，都静默无声。
+
 
 
 
