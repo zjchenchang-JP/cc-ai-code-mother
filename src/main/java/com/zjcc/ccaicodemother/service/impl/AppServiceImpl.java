@@ -25,6 +25,8 @@ import com.zjcc.ccaicodemother.model.enums.ChatHistoryMessageTypeEnum;
 import com.zjcc.ccaicodemother.model.enums.CodeGenTypeEnum;
 import com.zjcc.ccaicodemother.model.vo.AppVO;
 import com.zjcc.ccaicodemother.model.vo.UserVO;
+import com.zjcc.ccaicodemother.monitor.MonitorContext;
+import com.zjcc.ccaicodemother.monitor.MonitorContextHolder;
 import com.zjcc.ccaicodemother.service.AppService;
 import com.zjcc.ccaicodemother.service.ChatHistoryService;
 import com.zjcc.ccaicodemother.service.ScreenshotService;
@@ -183,7 +185,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         try {
             chatHistoryService.deleteByAppId(appId);
         } catch (Exception e) {
-            // 采用了容错设计 不用事务
+            // 代码优化 采用了容错设计 不用事务
             // 即使对话历史删除失败，也不会阻止应用的删除操作，只是记录错误日志，确保核心业务的稳定性
             log.error("删除应用关联对话历史失败: {}", e.getMessage());
         }
@@ -303,10 +305,23 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         // 在调用 AI 前，先保存用户消息到数据库中
         chatHistoryService.addChatMessage(appId, message, ChatHistoryMessageTypeEnum.USER.getValue(),
                 loginUser.getId());
-        // 6. 调用 AI 生成代码（流式）
+        // 6. 设置监控上下文
+        MonitorContextHolder.setContext(
+                MonitorContext.builder()
+                        .userId(loginUser.getId().toString())
+                        .appId(appId.toString())
+                        .build());
+
+        // 7. 调用 AI 生成代码（流式）
         Flux<String> codeStream = aiCodeGeneratorFacade.generateAndSaveCodeStream(message, codeGenTypeEnum, appId);
-        // 7. 收集AI响应内容并在完成后记录到对话历史
-        return streamHandlerExecutor.doExecute(codeStream, chatHistoryService, appId, loginUser, codeGenTypeEnum);
+        // 8. 收集AI响应内容并在完成后记录到对话历史
+        return streamHandlerExecutor
+                        .doExecute(codeStream, chatHistoryService, appId, loginUser, codeGenTypeEnum)
+                        .doFinally(signalType -> {
+                            // 流结束时清理TheadLocal（无论成功/失败/取消）
+                            // 清理时机是在流结束时，而不是方法返回值之前，确保整个请求周期内都能获取到上下文信息
+                            MonitorContextHolder.clearContext();
+                        });
     }
 
     @Override
